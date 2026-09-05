@@ -16,7 +16,7 @@ func NewKademliaID(data string) *KademliaID {
 	decoded, _ := hex.DecodeString(data)
 
 	newKademliaID := KademliaID{}
-	for i := 0; i < IDLength; i++ {
+	for i := range IDLength {
 		newKademliaID[i] = decoded[i]
 	}
 
@@ -35,7 +35,7 @@ func NewRandomKademliaID() *KademliaID {
 
 // Less returns true if kademliaID < otherKademliaID (bitwise)
 func (kademliaID KademliaID) Less(otherKademliaID *KademliaID) bool {
-	for i := 0; i < IDLength; i++ {
+	for i := range IDLength {
 		if kademliaID[i] != otherKademliaID[i] {
 			return kademliaID[i] < otherKademliaID[i]
 		}
@@ -45,7 +45,7 @@ func (kademliaID KademliaID) Less(otherKademliaID *KademliaID) bool {
 
 // Equals returns true if kademliaID == otherKademliaID (bitwise)
 func (kademliaID KademliaID) Equals(otherKademliaID *KademliaID) bool {
-	for i := 0; i < IDLength; i++ {
+	for i := range IDLength {
 		if kademliaID[i] != otherKademliaID[i] {
 			return false
 		}
@@ -57,7 +57,7 @@ func (kademliaID KademliaID) Equals(otherKademliaID *KademliaID) bool {
 // through a bitwise XOR operation betweeen kademliaID and target
 func (kademliaID KademliaID) CalcDistance(target *KademliaID) *KademliaID {
 	result := KademliaID{}
-	for i := 0; i < IDLength; i++ {
+	for i := range IDLength {
 		result[i] = kademliaID[i] ^ target[i]
 	}
 	return &result

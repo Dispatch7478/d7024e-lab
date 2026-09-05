@@ -2,18 +2,19 @@ package kademlia
 
 const bucketSize = 20
 
-
 // RoutingTable definition
 // keeps a refrence contact of me and an array of buckets
 type RoutingTable struct {
-	me      Contact
+	me Contact
+	// 256 buckets, one for every bit position (0 to 255).
+	// so  at most 256*20 = 5,120 total contacts per table.
 	buckets [IDLength * 8]*bucket
 }
 
 // NewRoutingTable returns a new instance of a RoutingTable
 func NewRoutingTable(me Contact) *RoutingTable {
 	routingTable := &RoutingTable{}
-	for i := 0; i < IDLength*8; i++ {
+	for i := range IDLength * 8 {
 		routingTable.buckets[i] = newBucket()
 	}
 	routingTable.me = me
@@ -58,13 +59,18 @@ func (routingTable *RoutingTable) FindClosestContacts(target *KademliaID, count 
 // getBucketIndex get the correct Bucket index for the KademliaID
 func (routingTable *RoutingTable) getBucketIndex(id *KademliaID) int {
 	distance := id.CalcDistance(routingTable.me.ID)
-	for i := 0; i < IDLength; i++ {
-		for j := 0; j < 8; j++ {
+	for i := range IDLength { // bytes 0 to 32
+		for j := range 8 { // bits in byte i
+			// Check the shared prefix, e.g.,
+			// msb = 1 -> no prefix so bucket 0
+			// msb = 0 and second msb = 1 -> 1-bit prefix so bucket 1
+			// Stops when the firsts bit that differs is found.
 			if (distance[i]>>uint8(7-j))&0x1 != 0 {
+				// Some sort of global index?
 				return i*8 + j
 			}
 		}
 	}
-
+	// Same id -> me.
 	return IDLength*8 - 1
 }
