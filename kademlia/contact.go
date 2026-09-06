@@ -9,7 +9,7 @@ import (
 // stores the KademliaID, the ip address and the distance
 type Contact struct {
 	ID       *KademliaID
-	Address  string
+	Address  string // "ip:port"
 	distance *KademliaID
 }
 

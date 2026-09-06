@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestCalcDistance(t *testing.T) {
+func TestKademliaIDCalcDistance(t *testing.T) {
 	t.Run("Identity", func(t *testing.T) {
 		id1 := NewKademliaID("0000000000000000000000000000000000000000000000000000000000000001")
 
@@ -43,7 +43,7 @@ func TestCalcDistance(t *testing.T) {
 	})
 }
 
-func TestLess(t *testing.T) {
+func TestKademliaLess(t *testing.T) {
 	idSmall := NewKademliaID("0000000000000000000000000000000000000000000000000000000000000001")
 	idLarge := NewKademliaID("0000000000000000000000000000000000000000000000000000000000000002")
 
@@ -67,17 +67,17 @@ func TestLess(t *testing.T) {
 
 	t.Run("Most significant byte determines order", func(t *testing.T) {
 		// large has 0x01 in byte 0
-        large := NewKademliaID("0100000000000000000000000000000000000000000000000000000000000000")
-        // small has 0x00 in byte 0 and 0xff in byte 31 (value = 255)
-        small := NewKademliaID("00000000000000000000000000000000000000000000000000000000000000ff")
+		large := NewKademliaID("0100000000000000000000000000000000000000000000000000000000000000")
+		// small has 0x00 in byte 0 and 0xff in byte 31 (value = 255)
+		small := NewKademliaID("00000000000000000000000000000000000000000000000000000000000000ff")
 
-        if !small.Less(large) {
-            t.Errorf("expected %s < %s", small, large)
-        }
+		if !small.Less(large) {
+			t.Errorf("expected %s < %s", small, large)
+		}
 	})
 }
 
-func TestEquals(t *testing.T) {
+func TestKademliaIDEquals(t *testing.T) {
 	id1 := NewKademliaID("0000000000000000000000000000000000000000000000000000000002000000")
 	id2 := NewKademliaID("0000000000000000000000000000000000000000000000000000000002000000")
 	idDiffFirst := NewKademliaID("ff00000000000000000000000000000000000000000000000000000002000000")
@@ -110,11 +110,11 @@ func TestNewRandomKademliaID(t *testing.T) {
 		t.Fatalf("generated ID should not be nil")
 	}
 	if id1.Equals(id2) {
-		t.Errorf("two consecutive random IDs should almost certainly not be equal")
+		t.Errorf("two consecutive random IDs should almost always not be equal")
 	}
 }
 
-func TestStringRoundTrip(t *testing.T) {
+func TestKademliaIDString(t *testing.T) {
 	hexID := "1111111122222222333333334444444455555555666666667777777788888888"
 	id := NewKademliaID(hexID)
 	if id.String() != hexID {

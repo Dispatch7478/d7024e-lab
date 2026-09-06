@@ -1,0 +1,18 @@
+version: '3'
+
+tasks:
+  default:
+    desc: format and run test
+    cmds:
+      - task: fmt
+      - task: test
+
+  fmt:
+    desc: format all go files
+    cmds:
+      - go fmt ./...
+
+  test:
+    desc: run tests with coverage and race detector
+    cmds:
+      - go test -v -race -cover ./...
