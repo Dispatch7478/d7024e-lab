@@ -1,6 +1,7 @@
 package kademlia
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"math/rand"
 )
@@ -31,6 +32,14 @@ func NewRandomKademliaID() *KademliaID {
 		newKademliaID[i] = uint8(rand.Intn(256))
 	}
 	return &newKademliaID
+}
+
+// NewKademliaIDFromAddress returns a enw instance of a KademliaID
+// based on the hash of a node's ip:port
+func NewKademliaIDFromAddress(addr string) *KademliaID {
+	hash := sha256.Sum256([]byte(addr))
+	id := KademliaID(hash)
+	return &id
 }
 
 // Less returns true if kademliaID < otherKademliaID (bitwise)

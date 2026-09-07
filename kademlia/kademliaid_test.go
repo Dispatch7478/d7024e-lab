@@ -121,3 +121,21 @@ func TestKademliaIDString(t *testing.T) {
 		t.Errorf("expected %s, got %s", hexID, id.String())
 	}
 }
+
+func TestNewKademliaIDFromAddress(t *testing.T) {
+	id1 := NewKademliaIDFromAddress("127.0.0.1:1111")
+	id2 := NewKademliaIDFromAddress("127.0.0.1:1111")
+	id3 := NewKademliaIDFromAddress("127.0.0.1:2222")
+
+	t.Run("Same ID for same address", func(t *testing.T) {
+		if !id1.Equals(id2) {
+			t.Errorf("expected identical ID for same address")
+		}
+	})
+
+	t.Run("Different IDs for different ports", func(t *testing.T) {
+		if id1.Equals(id3) {
+			t.Errorf("expected different ID for different address")
+		}
+	})
+}
