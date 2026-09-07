@@ -68,22 +68,42 @@ func TestRoutingTable(t *testing.T) {
 		}
 	})
 
-	// rt := NewRoutingTable(NewContact(NewKademliaID("FFFFFFFF00000000000000000000000000000000000000000000000000000000"), "localhost:8000"))
+	t.Run("Search in neighbour buckets", func(t *testing.T) {
+		rt := NewRoutingTable(me)
 
-	// rt.AddContact(NewContact(NewKademliaID("FFFFFFFF00000000000000000000000000000000000000000000000000000000"), "localhost:8001"))
-	// rt.AddContact(NewContact(NewKademliaID("1111111100000000000000000000000000000000000000000000000000000000"), "localhost:8002"))
-	// rt.AddContact(NewContact(NewKademliaID("1111111200000000000000000000000000000000000000000000000000000000"), "localhost:8002"))
-	// rt.AddContact(NewContact(NewKademliaID("1111111300000000000000000000000000000000000000000000000000000000"), "localhost:8002"))
-	// rt.AddContact(NewContact(NewKademliaID("1111111400000000000000000000000000000000000000000000000000000000"), "localhost:8002"))
-	// rt.AddContact(NewContact(NewKademliaID("2111111400000000000000000000000000000000000000000000000000000000"), "localhost:8002"))
+		// Target belongs to bucket 8 -> byte 1 = 0x80
+		target := NewKademliaID("0080000000000000000000000000000000000000000000000000000000000000")
 
-	// contacts := rt.FindClosestContacts(NewKademliaID("2111111400000000000000000000000000000000000000000000000000000000"), 20)
-	// for i := range contacts {
-	// 	fmt.Println(contacts[i].String())
-	// }
+		// cLower belongs to bucket 0 -> byte 0 = 0x80, which is index < 8
+		cLower := NewContact(NewKademliaID("8000000000000000000000000000000000000000000000000000000000000000"), "localhost:1001")
 
-	// // TODO: This is just an example. Make more meaningful assertions.
-	// if len(contacts) != 6 {
-	// 	t.Fatalf("Expected 6 contacts but instead got %d", len(contacts))
-	// }
+		// cHigher belongs to bucket 16 -> byte 2 = 0x80, which is index > 8
+		cHigher := NewContact(NewKademliaID("0000800000000000000000000000000000000000000000000000000000000000"), "localhost:1002")
+
+		rt.AddContact(cLower)
+		rt.AddContact(cHigher)
+
+		// Bucket 8 is empty, so FindClosestContacts must search both downwards/left (to bucket 0)
+		// and upwards/right (to bucket 16) to find 2 contacts.
+		contacts := rt.FindClosestContacts(target, 2)
+
+		if len(contacts) != 2 {
+			t.Fatalf("expected 2 contacts from neighbouring buckets, got %d", len(contacts))
+		}
+
+		foundLower := false
+		foundHigher := false
+		for _, c := range contacts {
+			if c.ID.Equals(cLower.ID) {
+				foundLower = true
+			}
+			if c.ID.Equals(cHigher.ID) {
+				foundHigher = true
+			}
+		}
+
+		if !foundLower || !foundHigher {
+			t.Errorf("expected to find both cLower and cHigher in search results")
+		}
+	})
 }
