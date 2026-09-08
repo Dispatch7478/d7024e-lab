@@ -47,6 +47,14 @@ func (n *Network) Listen(ip string, port int) error {
 	return nil
 }
 
+// Close closes the UDP socket
+func (n *Network) Close() error {
+	if n.conn != nil {
+		return n.conn.Close()
+	}
+	return nil
+}
+
 func (n *Network) SendPingMessage(contact *Contact) (*RPCMessage, error) {
 	req := RPCMessage{
 		Type:          Ping,
