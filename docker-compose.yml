@@ -9,6 +9,7 @@ version: "3"
 services:
   kademliaNodes:
     image: kadlab:latest # Make sure your Docker image has this name.
+    build: .
     stdin_open: true
     tty: true
     deploy:
