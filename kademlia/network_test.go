@@ -17,13 +17,13 @@ func TestNetwork_Ping_Success(t *testing.T) {
 	contactA := NewContact(idA, addrA)
 	contactB := NewContact(idB, addrB)
 
-	netA := NewUDPNewtork(contactA)
+	netA := NewUDPNewtork(contactA, nil)
 	if err := netA.Listen("127.0.0.1", 9101); err != nil {
 		t.Fatalf("failed to start listener A: %v", err)
 	}
 	defer netA.Close()
 
-	netB := NewUDPNewtork(contactB)
+	netB := NewUDPNewtork(contactB, nil)
 	if err := netB.Listen("127.0.0.1", 9102); err != nil {
 		t.Fatalf("failed to start listener B: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestNetwork_Ping_Timeout(t *testing.T) {
 	idA := NewKademliaIDFromAddress(addrA)
 	contactA := NewContact(idA, addrA)
 
-	netA := NewUDPNewtork(contactA)
+	netA := NewUDPNewtork(contactA, nil)
 	if err := netA.Listen("127.0.0.1", 9103); err != nil {
 		t.Fatalf("failed to start listener A: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestNetwork_Ping_Timeout(t *testing.T) {
 func TestNetwork_Listen_Error(t *testing.T) {
 	addr := "127.0.0.1:9104"
 	c := NewContact(NewKademliaIDFromAddress(addr), addr)
-	net1 := NewUDPNewtork(c)
+	net1 := NewUDPNewtork(c, nil)
 
 	if err := net1.Listen("127.0.0.1", 9104); err != nil {
 		t.Fatalf("failed to listen: %v", err)
@@ -81,7 +81,7 @@ func TestNetwork_Listen_Error(t *testing.T) {
 	defer net1.Close()
 
 	// Attempting to listen on the exact same port must fail
-	net2 := NewUDPNewtork(c)
+	net2 := NewUDPNewtork(c, nil)
 	if err := net2.Listen("127.0.0.1", 9104); err == nil {
 		defer net2.Close()
 		t.Errorf("expected error listening on already bound port, got nil")
@@ -91,7 +91,7 @@ func TestNetwork_Listen_Error(t *testing.T) {
 func TestNetwork_MalformedPacket(t *testing.T) {
 	addr := "127.0.0.1:9105"
 	c := NewContact(NewKademliaIDFromAddress(addr), addr)
-	netA := NewUDPNewtork(c)
+	netA := NewUDPNewtork(c, nil)
 
 	if err := netA.Listen("127.0.0.1", 9105); err != nil {
 		t.Fatalf("failed to listen: %v", err)
@@ -112,4 +112,51 @@ func TestNetwork_MalformedPacket(t *testing.T) {
 
 	// Give listen loop time to handle and discard without crashing
 	time.Sleep(20 * time.Millisecond)
+}
+
+func TestNetwork_FindContactMessage(t *testing.T) {
+	addrA := "127.0.0.1:9110"
+	addrB := "127.0.0.1:9111"
+
+	contactA := NewContact(NewKademliaIDFromAddress(addrA), addrA)
+	contactB := NewContact(NewKademliaIDFromAddress(addrB), addrB)
+
+	rtA := NewRoutingTable(contactA)
+	rtB := NewRoutingTable(contactB)
+
+	// Add 3 known contacts into Node B's routing table
+	c1 := NewContact(NewKademliaID("1000000000000000000000000000000000000000000000000000000000000000"), "127.0.0.1:8001")
+	c2 := NewContact(NewKademliaID("2000000000000000000000000000000000000000000000000000000000000000"), "127.0.0.1:8002")
+	c3 := NewContact(NewKademliaID("3000000000000000000000000000000000000000000000000000000000000000"), "127.0.0.1:8003")
+	rtB.AddContact(c1)
+	rtB.AddContact(c2)
+	rtB.AddContact(c3)
+
+	netA := NewUDPNewtork(contactA, rtA)
+	netB := NewUDPNewtork(contactB, rtB)
+
+	if err := netA.Listen("127.0.0.1", 9110); err != nil {
+		t.Fatalf("failed to listen A: %v", err)
+	}
+	defer netA.Close()
+
+	if err := netB.Listen("127.0.0.1", 9111); err != nil {
+		t.Fatalf("failed to listen B: %v", err)
+	}
+	defer netB.Close()
+
+	time.Sleep(20 * time.Millisecond)
+
+	// Node A queries Node B for contacts close to target
+	target := NewKademliaID("1000000000000000000000000000000000000000000000000000000000000000")
+	contacts, err := netA.SendFindContactMessage(target, &contactB)
+	if err != nil {
+		t.Fatalf("expected SendFindContactMessage to succeed, got %v", err)
+	}
+
+	// Considering that it will also return A itself. Might need
+	// to either add later 
+	if len(contacts) != 4 {
+		t.Errorf("expected 4 contacts returned from Node B, got %d, %v", len(contacts), contacts)
+	}
 }

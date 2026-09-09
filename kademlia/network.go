@@ -17,14 +17,16 @@ import (
 
 type Network struct {
 	me      Contact
+	rt      *RoutingTable // Need rt for reqs like find contact
 	conn    *net.UDPConn
 	mu      sync.Mutex
 	pending map[uuid.UUID]chan RPCMessage
 }
 
-func NewUDPNewtork(me Contact) *Network {
+func NewUDPNewtork(me Contact, rt *RoutingTable) *Network {
 	return &Network{
 		me:      me,
+		rt:      rt,
 		pending: make(map[uuid.UUID]chan RPCMessage),
 	}
 }
@@ -70,8 +72,19 @@ func (n *Network) SendPingMessage(contact *Contact) (*RPCMessage, error) {
 	return &res, nil
 }
 
-func (network *Network) SendFindContactMessage(contact *Contact) {
-	// TODO
+func (n *Network) SendFindContactMessage(target *KademliaID, contact *Contact) ([]Contact, error) {
+	req := RPCMessage{
+		Type:          FindContact,
+		TransactionID: uuid.New(),
+		Sender:        n.me,
+		TargetID:      target,
+	}
+
+	res, err := n.sendRPC(contact.Address, req, 1*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return res.Contacts, nil
 }
 
 func (network *Network) SendFindDataMessage(hash string) {
@@ -128,6 +141,29 @@ func (n *Network) handleMessage(msg RPCMessage, raddr *net.UDPAddr) {
 
 		data, _ := json.Marshal(reply)
 		// Currently ignoring error as package loss atm -> TODO handle it
+		n.conn.WriteToUDP(data, raddr)
+	case FindContact:
+		// Add sender to the routing table. Can cause "me" to be returned 
+		// as one of the closest contacts. An alternative could be 
+		// to defer adding -> ask at lab session tmr
+		if n.rt != nil {
+			n.rt.AddContact(msg.Sender)
+		}
+
+		// Find the closest contacts
+		var closest []Contact
+		if n.rt != nil {
+			closest = n.rt.FindClosestContacts(msg.TargetID, bucketSize)
+		}
+
+		reply := RPCMessage{
+			Type:          FindContact,
+			TransactionID: msg.TransactionID,
+			Sender:        n.me,
+			Contacts:      closest,
+		}
+
+		data, _ := json.Marshal(reply)
 		n.conn.WriteToUDP(data, raddr)
 	}
 }
