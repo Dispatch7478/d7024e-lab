@@ -4,30 +4,52 @@
 # Note that you must use the `docker stack deploy` command, with any required
 # command line flags, in order to actually get any replicas started. That
 # command requires that a docker swarm is already running in order to function.
-
-version: "3"
 services:
-  kademliaNodes:
-    image: kadlab:latest # Make sure your Docker image has this name.
-    stdin_open: true
-    tty: true
-    deploy:
-      mode: replicated
-      replicas: 5  
-#        resources:
-#           limits:
-#              cpus: "0.1"
-#              memory: 50M
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
-        window: 10s
-#    ports:
-#      - "4000:80"
+  node1:
+    build: .
+    image: kadlab:latest
+    container_name: kademlia_node1
+    environment:
+      - PORT=8000
+      - IP=0.0.0.0
+      - ADVERTISED_IP=node1
     networks:
-      - kademlia_network
-      
+      - kadnet
+  
+  node2:
+    build: .
+    image: kadlab:latest
+    container_name: kademlia_node2
+    environment:
+      - PORT=8000
+      - IP=0.0.0.0
+      - ADVERTISED_IP=node2
+      - PING_TARGET=node1:8000  
+    depends_on:
+      - node1
+    networks:
+      - kadnet
+  
 networks:
-  kademlia_network:
-
+  kadnet:
+    driver: bridge
+#   kademliaNodes:
+#     image: kadlab:latest # Make sure your Docker image has this name.
+#     stdin_open: true
+#     tty: true
+#     deploy:
+#       mode: replicated
+#       replicas: 5  
+# #        resources:
+# #           limits:
+# #              cpus: "0.1"
+# #              memory: 50M
+#       restart_policy:
+#         condition: on-failure
+#         delay: 5s
+#         max_attempts: 3
+#         window: 10s
+# #    ports:
+# #      - "4000:80"
+#     networks:
+#       - kademlia_network     
