@@ -4,14 +4,18 @@ package main
 
 import (
 	"d7024e/kademlia"
-	"fmt"
+	"log"
+	"os"
 )
 
-func main() {
-	fmt.Println("Pretending to run the kademlia app...")
-	// Using stuff from the kademlia package here. Something like...
-	id := kademlia.NewKademliaID("FFFFFFFF00000000000000000000000000000000")
-	contact := kademlia.NewContact(id, "localhost:8000")
-	fmt.Println(contact.String())
-	fmt.Printf("%v\n", contact)
+func main(){
+	port := 8000
+	bootstrapIP := os.Getenv("BOOTSTRAP_IP")
+
+	_, err := kademlia.NewNode(port, bootstrapIP)
+	if err != nil {
+		log.Fatalf("Fata node initialization error: %v", err)
+	}
+
+	select{}
 }

@@ -7,11 +7,21 @@
 
 version: "3"
 services:
+
+  kademlia-bootstrap:
+    image: kadlab:latest 
+    container_name: kademlia-bootstrap 
+    networks:
+      kademlia_network:
+        ipv4_address: 172.20.0.2
+
   kademliaNodes:
     image: kadlab:latest # Make sure your Docker image has this name.
     build: .
     stdin_open: true
     tty: true
+    environment:
+      - BOOTSTRAP_IP=172.20.0.2
     deploy:
       mode: replicated
       replicas: 5  
@@ -28,7 +38,12 @@ services:
 #      - "4000:80"
     networks:
       - kademlia_network
+    depends_on:
+      - kademlia-bootstrap
       
 networks:
   kademlia_network:
-
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

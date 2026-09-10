@@ -11,21 +11,24 @@ import (
 	"time"
 )
 
+// RPCHandler is a callback invoked when a incoming RPC message arrives 
+type RPCHandler func(msg RPCMessage) *RPCMessage 
+
 // Network handles low-level UDP-socket communication and incoming RPC dispatching 
 type Network struct {
 
 	// conn is the active UDP socket listener. 
-	conn     *net.UDPConn 
+	conn     				*net.UDPConn 
 	
 	// kademlia points to the local node to allow the network 
 	// layer to update the routing table etc.
-	kademlia *Kademlia
+	handler 				RPCHandler
 
 	//mu is a mutex lock.
-	mu       sync.Mutex
+	mu       				sync.Mutex
 
-	// RPC maps in-transmission Transaction IDs to their response channels.
-	RPC      map[string]chan RPCMessage
+	// pendingRPC maps in-transmission Transaction IDs to their response channels.
+	pendingRPC      map[string]chan RPCMessage
 }
 
 // RPCMessage contains all transmission-critical information
@@ -47,10 +50,10 @@ type RPCMessage struct {
 }
 
 // NewNetwork to create a new network instance 
-func NewNetwork(kademlia *Kademlia) *Network {
+func NewNetwork(handler RPCHandler) *Network {
 	return &Network{
-		kademlia: kademlia,
-		RPC:      make(map[string]chan RPCMessage),
+		handler: 					handler,
+		pendingRPC:				make(map[string]chan RPCMessage),
 	}
 }
 
@@ -76,102 +79,82 @@ func (network *Network) Listen(ip string, port int) error {
 
 	network.conn = conn
 
-	go func() {
-
-		buf := make([]byte, 65535)
-
-		for {
-			n, rAddr, err := network.conn.ReadFromUDP(buf)
-
-			if err != nil {
-				log.Printf("Read error %v", err)
-				return
-			}
-
-			var msg RPCMessage
-			if err := json.Unmarshal(buf[:n], &msg); err != nil {
-				continue
-			}
-
-			// if RPC is response from our request
-			network.mu.Lock()
-			ch, exists := network.RPC[msg.TransactionID]
-			network.mu.Unlock()
-
-			if exists {
-				ch <- msg
-				continue
-			}
-
-			// handle as incoming request
-			go network.handleRequest(msg, rAddr)
-		}
-	}()
-
+	go network.listenLoop()
 	return nil
 }
 
-// handleRequest processes incoming RPC requests, updates the routing table 
-// with the sender's contact info, and dispatches the appropriate reply.
-func (network *Network) handleRequest(msg RPCMessage, from *net.UDPAddr) {
-	// Update routing table with senders info
-	if network.kademlia != nil && msg.Sender.ID != nil {
-		network.kademlia.RoutingTable.AddContact(msg.Sender)
+// Gracefully close the udp connection 
+func (network *Network) Close() error {
+	if network.conn != nil {
+		return network.conn.Close()
 	}
-	var reply *RPCMessage
+	return nil
+}
 
-	switch msg.Type {
-	case "PING":
-		reply = &RPCMessage{
-			Type:          "PONG",
-			TransactionID: msg.TransactionID,
-			Sender:        network.kademlia.Me,
-		}
-	}
+func (network *Network) listenLoop() {
+	buff := make([]byte, 65535)
 
-	if reply != nil {
-		data, err := json.Marshal(reply)
-		if err == nil {
-			_, _ = network.conn.WriteToUDP(data, from)
+	for {
+
+		// Read from bytestream
+		bytesRead, rAddr, err := network.conn.ReadFromUDP(buff)
+		if err != nil {
+			log.Printf("UDP read error: %w", err)
+			return
 		}
+
+		// Unpakcage recieved message
+		var msg RPCMessage
+		if err := json.Unmarshal(buff[:bytesRead], &msg); err != nil{
+			log.Printf("Unable to unmarshal packet from %s: %v", rAddr, err)
+			continue
+		}
+		
+		// Case 1: response to an active outgoing request
+		network.mu.Lock()
+		ch, exists := network.pendingRPC[msg.TransactionID]
+		network.mu.Unlock()
+
+		if exists {
+			ch <- msg 
+			continue
+		}
+		
+		// case 2: treat as incoming request, pass on to handler
+		if network.handler != nil {
+			go func(req RPCMessage, senderAddr *net.UDPAddr){
+				if reply := network.handler(req); reply != nil{
+					data, err := json.Marshal(reply)
+					if err == nil {
+						_,_ = network.conn.WriteToUDP(data, senderAddr)
+					}
+				}
+			}(msg, rAddr)
+		}
+
 	}
 }
 
-// SendPingMessage transmits a PING RPC to the target contact and blocks until 
-// a corresponding PONG is recieved or the request times out.
-func (network *Network) SendPingMessage(contact *Contact) (*RPCMessage, error) {
-	
-	// generate TransactionID
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	txID := hex.EncodeToString(b)
+func (network *Network) sendRPC(targetAddr string, msg RPCMessage, timeout time.Duration) (*RPCMessage, error){
+
+	rAddr, err := net.ResolveUDPAddr("udp", targetAddr)
+	if err != nil{
+		return nil, fmt.Errorf("Invalid target address %s: %w", targetAddr ,err)
+	}
 	
 	// Channel and link transaction ID
 	respChan := make(chan RPCMessage, 1)
 
 	network.mu.Lock()
-	network.RPC[txID] = respChan
+	network.pendingRPC[msg.TransactionID] = respChan
 	network.mu.Unlock()
 
 	// delete when done
 	defer func() {
 		network.mu.Lock()
-		delete(network.RPC, txID)
+		delete(network.pendingRPC, msg.TransactionID)
 		network.mu.Unlock()
 	}()
-
-	// create PING RPC message
-	msg := RPCMessage{
-		Type:          "PING",
-		TransactionID: txID,
-		Sender:        network.kademlia.Me,
-	}
-
-	// get target/remote address
-	rAddr, err := net.ResolveUDPAddr("udp", contact.Address)
-	if err != nil {
-		return nil, err
-	}
 
 	// marshal the outgoing RPC PING
 	data, err := json.Marshal(msg)
@@ -180,8 +163,7 @@ func (network *Network) SendPingMessage(contact *Contact) (*RPCMessage, error) {
 	}
 
 	// write message to channel 
-	_, err = network.conn.WriteToUDP(data, rAddr)
-	if err != nil {
+	if _, err = network.conn.WriteToUDP(data, rAddr); err != nil{
 		return nil, err
 	}
 
@@ -189,9 +171,27 @@ func (network *Network) SendPingMessage(contact *Contact) (*RPCMessage, error) {
 	select {
 	case resp := <-respChan:
 		return &resp, nil
-	case <-time.After(2 * time.Second):
-		return nil, fmt.Errorf("ping to %s timed out", contact.Address)
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("RPC %s to %s timed out after %v", msg.Type, targetAddr, timeout)
 	}
+}
+
+// generate a Transaction ID
+func generateTxID() string{
+	b := make([]byte, 16)
+	_,_ =rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// SendPingMessage transmits a PING RPC to the target contact and blocks until 
+// a corresponding PONG is recieved or the request times out.
+func (network *Network) SendPingMessage(sender Contact, targetContact *Contact) (*RPCMessage, error) {
+	msg := RPCMessage{
+		Type: "PING",
+		TransactionID: generateTxID(),
+		Sender: sender,
+	}	
+	return network.sendRPC(targetContact.Address, msg, 2*time.Second)
 }
 
 func (network *Network) SendFindContactMessage(contact *Contact) {

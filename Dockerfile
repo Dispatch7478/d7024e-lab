@@ -11,3 +11,11 @@ FROM alpine:latest
 # "kadlab", which you do by using the following command:
 #
 # $ docker build . -t kadlab
+
+COPY kadlab /usr/local/bin/kadlab
+
+RUN chmod +x /usr/local/bin/kadlab
+
+CMD ["/usr/local/bin/kadlab"]
+
+
