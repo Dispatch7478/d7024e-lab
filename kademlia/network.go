@@ -43,10 +43,10 @@ type RPCMessage struct {
 	Sender        Contact     `json:"sender"`
 
 	// Target of the message
-	Target        *KademliaID `json:"target, omitempty"`
+	Target        *KademliaID `json:"target,omitempty"`
 
 	// A contact list 
-	Contacts      []Contact   `json:"contacts, omitempty"`
+	Contacts      []Contact   `json:"contacts,omitempty"`
 }
 
 // NewNetwork to create a new network instance 
@@ -99,7 +99,7 @@ func (network *Network) listenLoop() {
 		// Read from bytestream
 		bytesRead, rAddr, err := network.conn.ReadFromUDP(buff)
 		if err != nil {
-			log.Printf("UDP read error: %w", err)
+			log.Printf("UDP read error: %v", err)
 			return
 		}
 
@@ -187,15 +187,21 @@ func generateTxID() string{
 // a corresponding PONG is recieved or the request times out.
 func (network *Network) SendPingMessage(sender Contact, targetContact *Contact) (*RPCMessage, error) {
 	msg := RPCMessage{
-		Type: "PING",
-		TransactionID: generateTxID(),
-		Sender: sender,
+		Type: 						"PING",
+		TransactionID: 		generateTxID(),
+		Sender: 					sender,
 	}	
 	return network.sendRPC(targetContact.Address, msg, 2*time.Second)
 }
 
-func (network *Network) SendFindContactMessage(contact *Contact) {
-	// TODO
+func (network *Network) SendFindContactMessage(sender Contact, targetContact *Contact, targetID *KademliaID) (*RPCMessage, error) {
+	msg := RPCMessage {
+		Type: 						"FIND_NODE",
+		TransactionID:		generateTxID(),
+		Sender:						sender,
+		Target:						targetID,
+	}
+	return network.sendRPC(targetContact.Address, msg, 2*time.Second)
 }
 
 func (network *Network) SendFindDataMessage(hash string) {

@@ -21,7 +21,7 @@ func NewNode(port int, bootstrapIP string) (*Kademlia, error){
 	}
 
 	// create node identity
-	localAddr := fmt.Sprint("%s:%d", localIP, port)
+	localAddr := fmt.Sprintf("%s:%d", localIP, port)
 	me := NewContact(NewRandomKademliaID(), localAddr)
 	kad := NewKademlia(me)
 
@@ -47,6 +47,10 @@ func NewNode(port int, bootstrapIP string) (*Kademlia, error){
 			realBootstrapContact := resp.Sender 
 			kad.RoutingTable.AddContact(realBootstrapContact)
 			log.Printf("Successfully pinged bootstrap node %s (ID: %s)", realBootstrapContact.Address, realBootstrapContact.ID)
+
+			log.Printf("Executing self lookup to populate routing tabel...")
+			closestNodes := kad.LookupContact(&kad.Me)
+			log.Printf("self lookup complete. Discovered %d closest neighbors.", len(closestNodes))
 		}
 	}
 	return kad, nil 
