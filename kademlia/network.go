@@ -118,7 +118,6 @@ func (n *UDPNetwork) SendPingMessage(contact *Contact) (*RPCMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	return &res, nil
 }
 
@@ -153,31 +152,48 @@ func (network *UDPNetwork) SendStoreMessage(data []byte) {
 }
 
 // ==================HELPERS==========================
+
+// updateRoutingTable adds contact c to the local routing table if valid and not self.
+func (n *UDPNetwork) updateRoutingTable(c Contact) {
+	if n.rt == nil || c.ID == nil {
+		return
+	}
+	if n.me.ID != nil && c.ID.Equals(n.me.ID) {
+		return
+	}
+	n.rt.AddContact(c)
+}
+
 func (n *UDPNetwork) listenLoop() {
-	// Incoming data
+	// Incoming data buffer
 	buf := make([]byte, 65535) // Max UDP packet size
 
 	for {
-		// Read client message
-		bytesRead, raddr, err := n.conn.ReadFromUDP(buf)
+		// Blocks unti the packet/datagram arrives
+		len, raddr, err := n.conn.ReadFromUDP(buf)
 		if err != nil {
-			slog.Error("failed read from udp conn", slog.Any("err", err))
-			return // Probably connection closed
+			slog.Error("failed read from udp conn", "err", err)
+			return
 		}
 
 		var msg RPCMessage
-		if err := json.Unmarshal(buf[:bytesRead], &msg); err != nil {
-			slog.Error("failed to deserialize udp packet", slog.Any("err", err))
+		err = json.Unmarshal(buf[:len], &msg)
+		if err != nil {
+			slog.Error("failed to deserialize udp packet", "err", err)
 			continue
 		}
 
-		n.handleMessage(msg, raddr)
+		// Dispatch each message asynchronously so packet handling does not block the read loop.
+		go n.handleMessage(msg, raddr)
 	}
 }
 
 // handleMessage evaluates if the incoming packet is related to an existing
 // request (through the transaction ID) or if it's a new request
 func (n *UDPNetwork) handleMessage(msg RPCMessage, raddr *net.UDPAddr) {
+	// In Kademlia, every received packet (request or reply) refreshes the sender in our routing table
+	n.updateRoutingTable(msg.Sender)
+
 	// Check if it's a response to one of the pending requests
 	n.mu.Lock()
 	ch, exists := n.pending[msg.TransactionID]
@@ -204,10 +220,6 @@ func (n *UDPNetwork) handleMessage(msg RPCMessage, raddr *net.UDPAddr) {
 	case FindContact:
 		var filtered []Contact
 		if n.rt != nil {
-			if msg.Sender.ID != nil && (n.me.ID == nil || !msg.Sender.ID.Equals(n.me.ID)) {
-				n.rt.AddContact(msg.Sender)
-			}
-
 			closest := n.rt.FindClosestContacts(msg.TargetID, bucketSize)
 			filtered = make([]Contact, 0, len(closest))
 			for _, c := range closest {

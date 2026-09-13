@@ -5,7 +5,7 @@ import (
 	"log/slog"
 )
 
-const defaultAlpha = 1 // 3
+const defaultAlpha = 3
 
 // Kademlia represents a node in the Kademlia network.
 type Kademlia struct {
@@ -134,6 +134,7 @@ func (kademlia *Kademlia) Join(bootstrap Contact) error {
 	if kademlia.me.ID != nil {
 		kademlia.LookupContactByID(kademlia.me.ID)
 	}
+	// Need bucket refresh during join.
 	return nil
 }
 
