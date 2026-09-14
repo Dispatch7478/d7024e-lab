@@ -103,7 +103,8 @@ func (kademlia *Kademlia) LookupContactByID(target *KademliaID) []Contact {
 					}
 
 					shortlist.Add(found)
-
+					
+					// ASK: Should the contacts be added here or no?
 					if kademlia.routingTable != nil {
 						kademlia.routingTable.AddContact(found)
 					}
