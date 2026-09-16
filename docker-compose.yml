@@ -4,52 +4,46 @@
 # Note that you must use the `docker stack deploy` command, with any required
 # command line flags, in order to actually get any replicas started. That
 # command requires that a docker swarm is already running in order to function.
+
+version: "3"
 services:
-  node1:
-    build: .
-    image: kadlab:latest
-    container_name: kademlia_node1
-    environment:
-      - PORT=8000
-      - IP=0.0.0.0
-      - ADVERTISED_IP=node1
+
+  kademlia-bootstrap:
+    image: kadlab:latest 
+    container_name: kademlia-bootstrap 
     networks:
-      - kadnet
-  
-  node2:
+      kademlia_network:
+        ipv4_address: 172.20.0.2
+
+  kademliaNodes:
+    image: kadlab:latest # Make sure your Docker image has this name.
     build: .
-    image: kadlab:latest
-    container_name: kademlia_node2
+    stdin_open: true
+    tty: true
     environment:
-      - PORT=8000
-      - IP=0.0.0.0
-      - ADVERTISED_IP=node2
-      - PING_TARGET=node1:8000  
+      - BOOTSTRAP_IP=172.20.0.2
+    deploy:
+      mode: replicated
+      replicas: 5  
+#        resources:
+#           limits:
+#              cpus: "0.1"
+#              memory: 50M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 10s
+#    ports:
+#      - "4000:80"
+    networks:
+      - kademlia_network
     depends_on:
-      - node1
-    networks:
-      - kadnet
-  
+      - kademlia-bootstrap
+      
 networks:
-  kadnet:
+  kademlia_network:
     driver: bridge
-#   kademliaNodes:
-#     image: kadlab:latest # Make sure your Docker image has this name.
-#     stdin_open: true
-#     tty: true
-#     deploy:
-#       mode: replicated
-#       replicas: 5  
-# #        resources:
-# #           limits:
-# #              cpus: "0.1"
-# #              memory: 50M
-#       restart_policy:
-#         condition: on-failure
-#         delay: 5s
-#         max_attempts: 3
-#         window: 10s
-# #    ports:
-# #      - "4000:80"
-#     networks:
-#       - kademlia_network     
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
