@@ -62,6 +62,8 @@ func runCLI(kad *kademlia.Kademlia){
 		switch cmd {
 		case "EXIT":
 			fmt.Printf("Thank you for using this kademlia interactive CLI!")
+			os.Stdin.Close()
+			return
 
 		// Pinging node A from node B 
 		case "PING":
