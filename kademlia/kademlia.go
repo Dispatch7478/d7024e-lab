@@ -57,6 +57,7 @@ func (kad *Kademlia) HandleIncomingRPC (msg RPCMessage) *RPCMessage {
 	}
 }
 
+
 func (kad *Kademlia) SendPing(targetContact *Contact) (*RPCMessage, error){
 	return kad.Network.SendPingMessage(kad.Me, targetContact)
 }

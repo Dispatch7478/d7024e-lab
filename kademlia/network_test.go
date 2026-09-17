@@ -111,3 +111,18 @@ func TestSendFindContactMessage_Timeout(t *testing.T) {
 		t.Fatalf("Expected timeout error, got response: %v", resp)
 	}
 }
+
+func TestSendRPC(t *testing.T){	
+	id1 := NewRandomKademliaID()
+	c1 := NewContact(id1, "127.0.0.1:9001")
+	kad1 := &Kademlia{Me: c1, RoutingTable: NewRoutingTable(c1)}
+	net1 := NewNetwork(kad1.HandleIncomingRPC)
+	targetID := NewRandomKademliaID()
+	if err := net1.Listen("127.0.0.1", 9104); err != nil{
+		t.Fatalf("Listen failed: %v", err)
+	}
+	net1.Close()
+	if resp, err := net1.SendFindContactMessage(kad1.Me, &c1, targetID); err == nil{
+		t.Fatalf("Expected writing to UDP to fail, but got: %v", resp)
+	}
+}

@@ -10,7 +10,9 @@ services:
 
   kademlia-bootstrap:
     image: kadlab:latest 
-    container_name: kademlia-bootstrap 
+    container_name: kademlia-bootstrap
+    stdin_open: true 
+    tty: true 
     networks:
       kademlia_network:
         ipv4_address: 172.20.0.2

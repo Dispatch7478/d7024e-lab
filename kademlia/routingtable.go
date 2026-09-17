@@ -74,3 +74,17 @@ func (routingTable *RoutingTable) getBucketIndex(id *KademliaID) int {
 	// Same id -> me.
 	return IDLength*8 - 1
 }
+
+
+// returns list of all active contacts stored across all buckets in a routing table 
+func (rt *RoutingTable) GetAllContacts() []Contact {
+	var contacts []Contact 
+	for _, bucket := range rt.buckets {
+		for element := bucket.list.Front(); element != nil; element = element.Next() {
+			if contact, ok := element.Value.(Contact); ok{
+				contacts = append(contacts, contact)
+			}
+		}
+	}
+	return contacts 
+}
