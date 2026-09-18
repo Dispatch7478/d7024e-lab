@@ -9,9 +9,9 @@ const defaultAlpha = 3
 
 // Kademlia represents a node in the Kademlia network.
 type Kademlia struct {
-	me           Contact
-	routingTable *RoutingTable
-	network      Network
+	Me           Contact
+	RoutingTable *RoutingTable
+	Network      Network
 	alpha        int
 }
 
@@ -24,11 +24,19 @@ func NewKademlia(me Contact, network Network, routingTable *RoutingTable, alpha 
 	}
 
 	return &Kademlia{
-		me:           me,
-		network:      network,
-		routingTable: routingTable,
+		Me:           me,
+		Network:      network,
+		RoutingTable: routingTable,
 		alpha:        a,
 	}
+}
+
+// SendPing sends a ping message to target contact and returns the RPC response.
+func (kademlia *Kademlia) SendPing(targetContact *Contact) (*RPCMessage, error) {
+	if kademlia.Network == nil {
+		return nil, fmt.Errorf("network is nil")
+	}
+	return kademlia.Network.SendPingMessage(targetContact)
 }
 
 // LookupContact performs an iterative node lookup for a target contact using alpha parallel probes.
@@ -47,18 +55,18 @@ func (kademlia *Kademlia) LookupContactByID(target *KademliaID) []Contact {
 		return []Contact{}
 	}
 
-	if kademlia.routingTable == nil {
+	if kademlia.RoutingTable == nil {
 		return []Contact{}
 	}
 
 	// Initialize shortlist from local routing table
-	shortlist := NewShortlist(target, kademlia.me.ID)
-	initialContacts := kademlia.routingTable.FindClosestContacts(target, bucketSize)
+	shortlist := NewShortlist(target, kademlia.Me.ID)
+	initialContacts := kademlia.RoutingTable.FindClosestContacts(target, bucketSize)
 	shortlist.Add(initialContacts...)
 
 	// If no network available or shortlist is empty, return whatever local routing table has
-	if kademlia.network == nil || shortlist.Len() == 0 {
-		return kademlia.routingTable.FindClosestContacts(target, bucketSize)
+	if kademlia.Network == nil || shortlist.Len() == 0 {
+		return kademlia.RoutingTable.FindClosestContacts(target, bucketSize)
 	}
 
 	// Iterative lookup loop
@@ -79,7 +87,7 @@ func (kademlia *Kademlia) LookupContactByID(target *KademliaID) []Contact {
 
 		for _, contact := range probes {
 			go func(c Contact) {
-				found, err := kademlia.network.SendFindContactMessage(target, &c)
+				found, err := kademlia.Network.SendFindContactMessage(target, &c)
 				results <- probeResult{contact: c, contacts: found, err: err}
 			}(contact)
 		}
@@ -92,13 +100,13 @@ func (kademlia *Kademlia) LookupContactByID(target *KademliaID) []Contact {
 			} else { // Responsive
 				shortlist.MarkQueried(res.contact.ID)
 
-				if kademlia.routingTable != nil {
-					kademlia.routingTable.AddContact(res.contact)
+				if kademlia.RoutingTable != nil {
+					kademlia.RoutingTable.AddContact(res.contact)
 				}
 
 				for _, found := range res.contacts {
 					// As always just to be sure that it doesn't take itself into account.
-					if found.ID == nil || (kademlia.me.ID != nil && found.ID.Equals(kademlia.me.ID)) {
+					if found.ID == nil || (kademlia.Me.ID != nil && found.ID.Equals(kademlia.Me.ID)) {
 						continue
 					}
 
@@ -119,16 +127,16 @@ func (kademlia *Kademlia) Join(bootstrap Contact) error {
 	if bootstrap.ID == nil {
 		return fmt.Errorf("bootstrap contact ID cannot be nil")
 	}
-	if kademlia.me.ID != nil && bootstrap.ID.Equals(kademlia.me.ID) {
+	if kademlia.Me.ID != nil && bootstrap.ID.Equals(kademlia.Me.ID) {
 		return fmt.Errorf("cannot join network using self as bootstrap")
 	}
-	if kademlia.routingTable == nil {
+	if kademlia.RoutingTable == nil {
 		return fmt.Errorf("routing table is nil")
 	}
 
-	kademlia.routingTable.AddContact(bootstrap)
-	if kademlia.me.ID != nil {
-		kademlia.LookupContactByID(kademlia.me.ID)
+	kademlia.RoutingTable.AddContact(bootstrap)
+	if kademlia.Me.ID != nil {
+		kademlia.LookupContactByID(kademlia.Me.ID)
 	}
 	// Need bucket refresh during join.
 	return nil

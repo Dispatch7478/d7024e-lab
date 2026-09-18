@@ -127,11 +127,11 @@ func TestKademlia_LookupContact(t *testing.T) {
 		// Node C is known to Node B
 		kadC, cleanupC := setupTestNode(t, "3000000000000000000000000000000000000000000000000000000000000000", 3, hub)
 		defer cleanupC()
-		c3ID := kadC.me.ID
-		kadB.routingTable.AddContact(kadC.me)
+		c3ID := kadC.Me.ID
+		kadB.RoutingTable.AddContact(kadC.Me)
 
 		// Node A only knows Node B initially
-		kadA.routingTable.AddContact(kadB.me)
+		kadA.RoutingTable.AddContact(kadB.Me)
 
 		// Node A looks up target 3000... (closest to Node C)
 		target := c3ID
@@ -145,7 +145,7 @@ func TestKademlia_LookupContact(t *testing.T) {
 			if c.ID.Equals(c3ID) {
 				foundC = true
 			}
-			if c.ID.Equals(kadB.me.ID) {
+			if c.ID.Equals(kadB.Me.ID) {
 				foundB = true
 			}
 		}
@@ -158,7 +158,7 @@ func TestKademlia_LookupContact(t *testing.T) {
 		}
 
 		// Verify Node C was also added to Node A's local routing table
-		rtClosest := kadA.routingTable.FindClosestContacts(target, bucketSize)
+		rtClosest := kadA.RoutingTable.FindClosestContacts(target, bucketSize)
 		rtHasC := false
 		for _, c := range rtClosest {
 			if c.ID.Equals(c3ID) {
@@ -182,12 +182,12 @@ func TestKademlia_LookupContact(t *testing.T) {
 		kadD, cleanupD := setupTestNode(t, "4000000000000000000000000000000000000000000000000000000000000000", 3, hub)
 		defer cleanupD()
 
-		kadA.routingTable.AddContact(kadB.me)
-		kadB.routingTable.AddContact(kadC.me)
-		kadC.routingTable.AddContact(kadD.me)
+		kadA.RoutingTable.AddContact(kadB.Me)
+		kadB.RoutingTable.AddContact(kadC.Me)
+		kadC.RoutingTable.AddContact(kadD.Me)
 
 		// Node A looks up Node D's ID
-		target := kadD.me.ID
+		target := kadD.Me.ID
 		targetContact := NewContact(target, "")
 		results := kadA.LookupContact(&targetContact)
 
@@ -222,8 +222,8 @@ func TestKademlia_LookupContact(t *testing.T) {
 		deadID := NewKademliaID("3000000000000000000000000000000000000000000000000000000000000000")
 		deadContact := NewContact(deadID, "sim:dead_unreachable_node")
 
-		kadA.routingTable.AddContact(kadB.me)
-		kadA.routingTable.AddContact(deadContact)
+		kadA.RoutingTable.AddContact(kadB.Me)
+		kadA.RoutingTable.AddContact(deadContact)
 
 		target := NewKademliaID("2000000000000000000000000000000000000000000000000000000000000000")
 		results := kadA.LookupContactByID(target)
@@ -238,7 +238,7 @@ func TestKademlia_LookupContact(t *testing.T) {
 		// Responsive node B should be present
 		foundB := false
 		for _, c := range results {
-			if c.ID.Equals(kadB.me.ID) {
+			if c.ID.Equals(kadB.Me.ID) {
 				foundB = true
 			}
 		}
@@ -257,7 +257,7 @@ func TestKademlia_LookupContact(t *testing.T) {
 			idStr := fmt.Sprintf("%064x", i)
 			node, cleanup := setupTestNode(t, idStr, 3, hub)
 			cleanups = append(cleanups, cleanup)
-			kadA.routingTable.AddContact(node.me)
+			kadA.RoutingTable.AddContact(node.Me)
 		}
 		defer func() {
 			for _, c := range cleanups {
@@ -289,28 +289,28 @@ func TestKademlia_Join(t *testing.T) {
 	})
 
 	t.Run("Self as bootstrap node returns error", func(t *testing.T) {
-		if err := kadA.Join(kadA.me); err == nil {
+		if err := kadA.Join(kadA.Me); err == nil {
 			t.Errorf("expected error joining with self as bootstrap")
 		}
 	})
 
 	t.Run("Nil routing table returns error", func(t *testing.T) {
-		kadNilRT := NewKademlia(kadA.me, kadA.network, nil, 0)
-		if err := kadNilRT.Join(kadB.me); err == nil {
+		kadNilRT := NewKademlia(kadA.Me, kadA.Network, nil, 0)
+		if err := kadNilRT.Join(kadB.Me); err == nil {
 			t.Errorf("expected error joining with nil routing table")
 		}
 	})
 
 	t.Run("Successful join adds bootstrap and performs self lookup", func(t *testing.T) {
-		if err := kadA.Join(kadB.me); err != nil {
+		if err := kadA.Join(kadB.Me); err != nil {
 			t.Fatalf("expected successful join, got: %v", err)
 		}
 
 		// Node A should now have Node B in its routing table
-		closest := kadA.routingTable.FindClosestContacts(kadB.me.ID, bucketSize)
+		closest := kadA.RoutingTable.FindClosestContacts(kadB.Me.ID, bucketSize)
 		foundB := false
 		for _, c := range closest {
-			if c.ID.Equals(kadB.me.ID) {
+			if c.ID.Equals(kadB.Me.ID) {
 				foundB = true
 			}
 		}

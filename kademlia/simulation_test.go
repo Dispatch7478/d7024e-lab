@@ -39,7 +39,7 @@ func TestSimulation_1000Nodes(t *testing.T) {
 		// Nodes join via the bootstrap node (or an already joined node)
 		for i := 1; i < totalNodes; i++ {
 			// Connect to bootstrap node
-			err := nodes[i].Join(nodes[0].me)
+			err := nodes[i].Join(nodes[0].Me)
 			if err != nil {
 				t.Fatalf("failed to join node %d: %v", i, err)
 			}

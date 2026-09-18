@@ -106,4 +106,23 @@ func TestRoutingTable(t *testing.T) {
 			t.Errorf("expected to find both cLower and cHigher in search results")
 		}
 	})
+
+	t.Run("GetAllContacts returns all added contacts", func(t *testing.T) {
+		rt := NewRoutingTable(me)
+		if contacts := rt.GetAllContacts(); len(contacts) != 0 {
+			t.Errorf("expected empty routing table to return 0 contacts, got %d", len(contacts))
+		}
+
+		c1 := NewContact(NewKademliaID("1000000000000000000000000000000000000000000000000000000000000000"), "127.0.0.1:8001")
+		c2 := NewContact(NewKademliaID("2000000000000000000000000000000000000000000000000000000000000000"), "127.0.0.1:8002")
+
+		rt.AddContact(c1)
+		rt.AddContact(c2)
+
+		all := rt.GetAllContacts()
+		if len(all) != 2 {
+			t.Fatalf("expected 2 contacts, got %d", len(all))
+		}
+	})
 }
+
