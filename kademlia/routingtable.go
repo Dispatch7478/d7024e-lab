@@ -99,3 +99,30 @@ func (routingTable *RoutingTable) GetAllContacts() []Contact {
 	}
 	return contacts
 }
+
+// GetClosestNonEmptyBucketIndex returns the highest bucket index that contains at least
+// one contact (i.e. the bucket with contacts closest to the local node).
+// Returns -1 if all buckets are empty.
+func (routingTable *RoutingTable) GetClosestNonEmptyBucketIndex() int {
+	routingTable.mu.RLock()
+	defer routingTable.mu.RUnlock()
+
+	for i := IDLength*8 - 1; i >= 0; i-- {
+		if routingTable.buckets[i].Len() > 0 {
+			return i
+		}
+	}
+	return -1
+}
+
+// IsBucketEmpty reports whether the bucket at index is empty.
+// Returns true if index is out of bounds or the bucket has no contacts.
+func (routingTable *RoutingTable) IsBucketEmpty(index int) bool {
+	routingTable.mu.RLock()
+	defer routingTable.mu.RUnlock()
+
+	if index < 0 || index >= IDLength*8 {
+		return true
+	}
+	return routingTable.buckets[index].Len() == 0
+}

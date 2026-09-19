@@ -3,6 +3,7 @@ package kademlia
 import (
 	"fmt"
 	"log/slog"
+	"math/rand"
 )
 
 const defaultAlpha = 3
@@ -134,11 +135,25 @@ func (kademlia *Kademlia) Join(bootstrap Contact) error {
 		return fmt.Errorf("routing table is nil")
 	}
 
+	// Join bootstrap.
 	kademlia.RoutingTable.AddContact(bootstrap)
+
+	// Lookup self.
 	if kademlia.Me.ID != nil {
 		kademlia.LookupContactByID(kademlia.Me.ID)
+
+		// Find the highest bucket index that contains a contact, i.e., the closest neighbour's bucket.
+		closestBucket := kademlia.RoutingTable.GetClosestNonEmptyBucketIndex()
+
+		// Refresh any empty bucket away from the closest one by performing a lookup on a random
+		// contact whose ID belongs to the respective empty bucket range.
+		for i := 0; i < closestBucket; i++ {
+			if kademlia.RoutingTable.IsBucketEmpty(i) {
+				randomTarget := kademlia.generateRandomIDForBucket(i)
+				kademlia.LookupContactByID(randomTarget)
+			}
+		}
 	}
-	// Need bucket refresh during join.
 	return nil
 }
 
@@ -148,4 +163,37 @@ func (kademlia *Kademlia) LookupData(hash string) {
 
 func (kademlia *Kademlia) Store(data []byte) {
 	// TODO
+}
+
+// generateRandomIDForBucket returns a random KademliaID that falls within the distance range of bucket index.
+func (kademlia *Kademlia) generateRandomIDForBucket(index int) *KademliaID {
+	if kademlia.Me.ID == nil || index < 0 || index >= IDLength*8 {
+		return NewRandomKademliaID()
+	}
+
+	// Start from the local node's ID.
+	target := *kademlia.Me.ID
+	// Extract the respective byte from the respective 32-byte arrays contains the index bit.
+	byteIdx := index / 8
+	// Find the bit's power of 2 to build the mask.
+	bitOffset := uint(7 - (index % 8))
+
+	// Flip the bit at index so XOR distance differs at this exact bit position.
+	target[byteIdx] ^= (1 << bitOffset)
+
+	// Randomize bits less significant than bitOffset in the same byte.
+	for b := 0; b < int(bitOffset); b++ {
+		if rand.Intn(2) == 1 {
+			target[byteIdx] |= (1 << uint(b))
+		} else {
+			target[byteIdx] &= ^(1 << uint(b))
+		}
+	}
+
+	// Randomize the rest of the bytes.
+	for b := byteIdx + 1; b < IDLength; b++ {
+		target[b] = byte(rand.Intn(256))
+	}
+
+	return &target
 }

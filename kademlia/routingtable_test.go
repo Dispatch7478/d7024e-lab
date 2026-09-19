@@ -124,5 +124,51 @@ func TestRoutingTable(t *testing.T) {
 			t.Fatalf("expected 2 contacts, got %d", len(all))
 		}
 	})
-}
 
+	t.Run("GetClosestNonEmptyBucketIndex on empty table returns -1", func(t *testing.T) {
+		rt := NewRoutingTable(me)
+		if idx := rt.GetClosestNonEmptyBucketIndex(); idx != -1 {
+			t.Errorf("expected -1 on empty table, got %d", idx)
+		}
+	})
+
+	t.Run("GetClosestNonEmptyBucketIndex returns highest non-empty bucket index", func(t *testing.T) {
+		rt := NewRoutingTable(me)
+
+		// cLower belongs to bucket 0
+		cLower := NewContact(NewKademliaID("8000000000000000000000000000000000000000000000000000000000000000"), "localhost:1001")
+		rt.AddContact(cLower)
+
+		if idx := rt.GetClosestNonEmptyBucketIndex(); idx != 0 {
+			t.Errorf("expected index 0, got %d", idx)
+		}
+
+		// cHigher belongs to bucket 16
+		cHigher := NewContact(NewKademliaID("0000800000000000000000000000000000000000000000000000000000000000"), "localhost:1002")
+		rt.AddContact(cHigher)
+
+		if idx := rt.GetClosestNonEmptyBucketIndex(); idx != 16 {
+			t.Errorf("expected index 16 (closest / highest), got %d", idx)
+		}
+	})
+
+	t.Run("IsBucketEmpty checks bucket state and out of bounds", func(t *testing.T) {
+		rt := NewRoutingTable(me)
+		if !rt.IsBucketEmpty(0) {
+			t.Errorf("expected bucket 0 to be empty")
+		}
+
+		c := NewContact(NewKademliaID("8000000000000000000000000000000000000000000000000000000000000000"), "localhost:1001")
+		rt.AddContact(c)
+
+		if rt.IsBucketEmpty(0) {
+			t.Errorf("expected bucket 0 to NOT be empty")
+		}
+		if !rt.IsBucketEmpty(-1) {
+			t.Errorf("expected out of bounds -1 to report empty")
+		}
+		if !rt.IsBucketEmpty(300) {
+			t.Errorf("expected out of bounds 300 to report empty")
+		}
+	})
+}
