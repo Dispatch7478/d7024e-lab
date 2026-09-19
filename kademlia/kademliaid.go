@@ -42,6 +42,13 @@ func NewKademliaIDFromAddress(addr string) *KademliaID {
 	return &id
 }
 
+// NewKademliaIDFromData returns a KademliaID based on SHA-256 hash of arbitrary data.
+func NewKademliaIDFromData(data []byte) *KademliaID {
+	hash := sha256.Sum256(data)
+	id := KademliaID(hash)
+	return &id
+}
+
 // Less returns true if kademliaID < otherKademliaID (bitwise)
 func (kademliaID KademliaID) Less(otherKademliaID *KademliaID) bool {
 	for i := range IDLength {
