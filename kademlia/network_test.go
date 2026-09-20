@@ -17,13 +17,13 @@ func TestNetwork_Ping_Success(t *testing.T) {
 	contactA := NewContact(idA, addrA)
 	contactB := NewContact(idB, addrB)
 
-	netA := NewUDPNetwork(contactA, nil)
+	netA := NewUDPNetwork(contactA, nil, NewDataStore())
 	if err := netA.Listen("127.0.0.1", 9101); err != nil {
 		t.Fatalf("failed to start listener A: %v", err)
 	}
 	defer netA.Close()
 
-	netB := NewUDPNetwork(contactB, nil)
+	netB := NewUDPNetwork(contactB, nil, NewDataStore())
 	if err := netB.Listen("127.0.0.1", 9102); err != nil {
 		t.Fatalf("failed to start listener B: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestNetwork_Ping_Timeout(t *testing.T) {
 	idA := NewKademliaIDFromAddress(addrA)
 	contactA := NewContact(idA, addrA)
 
-	netA := NewUDPNetwork(contactA, nil)
+	netA := NewUDPNetwork(contactA, nil, NewDataStore())
 	if err := netA.Listen("127.0.0.1", 9103); err != nil {
 		t.Fatalf("failed to start listener A: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestNetwork_Ping_Timeout(t *testing.T) {
 func TestNetwork_Listen_Error(t *testing.T) {
 	addr := "127.0.0.1:9104"
 	c := NewContact(NewKademliaIDFromAddress(addr), addr)
-	net1 := NewUDPNetwork(c, nil)
+	net1 := NewUDPNetwork(c, nil, NewDataStore())
 
 	if err := net1.Listen("127.0.0.1", 9104); err != nil {
 		t.Fatalf("failed to listen: %v", err)
@@ -81,7 +81,7 @@ func TestNetwork_Listen_Error(t *testing.T) {
 	defer net1.Close()
 
 	// Attempting to listen on the exact same port must fail
-	net2 := NewUDPNetwork(c, nil)
+	net2 := NewUDPNetwork(c, nil, NewDataStore())
 	if err := net2.Listen("127.0.0.1", 9104); err == nil {
 		defer net2.Close()
 		t.Errorf("expected error listening on already bound port, got nil")
@@ -91,7 +91,7 @@ func TestNetwork_Listen_Error(t *testing.T) {
 func TestNetwork_MalformedPacket(t *testing.T) {
 	addr := "127.0.0.1:9105"
 	c := NewContact(NewKademliaIDFromAddress(addr), addr)
-	netA := NewUDPNetwork(c, nil)
+	netA := NewUDPNetwork(c, nil, NewDataStore())
 
 	if err := netA.Listen("127.0.0.1", 9105); err != nil {
 		t.Fatalf("failed to listen: %v", err)
@@ -132,8 +132,8 @@ func TestNetwork_FindContactMessage(t *testing.T) {
 	rtB.AddContact(c2)
 	rtB.AddContact(c3)
 
-	netA := NewUDPNetwork(contactA, rtA)
-	netB := NewUDPNetwork(contactB, rtB)
+	netA := NewUDPNetwork(contactA, rtA, NewDataStore())
+	netB := NewUDPNetwork(contactB, rtB, NewDataStore())
 
 	if err := netA.Listen("127.0.0.1", 9110); err != nil {
 		t.Fatalf("failed to listen A: %v", err)
@@ -164,4 +164,68 @@ func TestNetwork_FindContactMessage(t *testing.T) {
 			t.Errorf("expected sender not to be returned in closest contacts, but got %v", c)
 		}
 	}
+}
+
+func TestNetwork_FindData_And_Store(t *testing.T) {
+	addrA := "127.0.0.1:9120"
+	addrB := "127.0.0.1:9121"
+
+	contactA := NewContact(NewKademliaIDFromAddress(addrA), addrA)
+	contactB := NewContact(NewKademliaIDFromAddress(addrB), addrB)
+
+	dsA := NewDataStore()
+	dsB := NewDataStore()
+	netA := NewUDPNetwork(contactA, nil, dsA)
+	netB := NewUDPNetwork(contactB, nil, dsB)
+
+	if err := netA.Listen("127.0.0.1", 9120); err != nil {
+		t.Fatalf("failed to listen A: %v", err)
+	}
+	defer netA.Close()
+
+	if err := netB.Listen("127.0.0.1", 9121); err != nil {
+		t.Fatalf("failed to listen B: %v", err)
+	}
+	defer netB.Close()
+
+	time.Sleep(20 * time.Millisecond)
+
+	val := []byte("udp payload package test data")
+	key := NewKademliaIDFromData(val)
+
+	// Node A sends STORE to Node B over UDP
+	if err := netA.SendStoreMessage(&contactB, key, val); err != nil {
+		t.Fatalf("expected SendStoreMessage to succeed over UDP, got %v", err)
+	}
+
+	// Give receiver goroutine time to process
+	time.Sleep(20 * time.Millisecond)
+
+	// Verify Node B stored it
+	if !dsB.Has(*key) {
+		t.Fatalf("expected node B to have stored the key in its DataStore")
+	}
+
+	// Node A queries Node B for existing data -> returns data
+	foundData, closest, err := netA.SendFindDataMessage(key, &contactB)
+	if err != nil {
+		t.Fatalf("expected SendFindDataMessage to succeed, got %v", err)
+	}
+	if string(foundData) != string(val) {
+		t.Errorf("expected %s, got %s", string(val), string(foundData))
+	}
+	if len(closest) != 0 {
+		t.Errorf("expected empty contacts when data is found")
+	}
+
+	// Node A queries Node B for missing data -> returns contacts
+	missingKey := NewKademliaID("9999999999999999999999999999999999999999999999999999999999999999")
+	missingData, missingClosest, err := netA.SendFindDataMessage(missingKey, &contactB)
+	if err != nil {
+		t.Fatalf("expected SendFindDataMessage for missing key to succeed, got %v", err)
+	}
+	if len(missingData) != 0 {
+		t.Errorf("expected empty data for missing key, got %s", string(missingData))
+	}
+	_ = missingClosest
 }

@@ -1,8 +1,10 @@
 package kademlia
 
 import (
+	"errors"
 	"fmt"
 	"testing"
+	"time"
 )
 
 // Helper to create and start a test Kademlia node using SimulatedNetwork
@@ -26,9 +28,10 @@ func setupTestNode(t *testing.T, idStr string, alpha int, hub ...*SimulatedHub) 
 	addr := fmt.Sprintf("sim:%s", id.String()[:12])
 	me := NewContact(id, addr)
 	rt := NewRoutingTable(me)
-	network := NewSimulatedNetwork(me, rt, h)
+	ds := NewDataStore()
+	network := NewSimulatedNetwork(me, rt, h, ds)
 
-	kad := NewKademlia(me, network, rt, alpha)
+	kad := NewKademlia(me, network, rt, ds, alpha)
 
 	cleanup := func() {
 		network.Close()
@@ -42,17 +45,18 @@ func TestNewKademlia(t *testing.T) {
 	id := NewKademliaIDFromAddress(addr)
 	me := NewContact(id, addr)
 	rt := NewRoutingTable(me)
-	net := NewUDPNetwork(me, rt)
+	ds := NewDataStore()
+	net := NewUDPNetwork(me, rt, ds)
 
 	t.Run("Default alpha when passing 0", func(t *testing.T) {
-		kadDefault := NewKademlia(me, net, rt, 0)
+		kadDefault := NewKademlia(me, net, rt, ds, 0)
 		if kadDefault.alpha != defaultAlpha {
 			t.Errorf("expected default alpha %d, got %d", defaultAlpha, kadDefault.alpha)
 		}
 	})
 
 	t.Run("Custom alpha", func(t *testing.T) {
-		kadCustom := NewKademlia(me, net, rt, 5)
+		kadCustom := NewKademlia(me, net, rt, ds, 5)
 		if kadCustom.alpha != 5 {
 			t.Errorf("expected custom alpha 5, got %d", kadCustom.alpha)
 		}
@@ -65,7 +69,7 @@ func TestKademlia_LookupContact(t *testing.T) {
 		id := NewKademliaIDFromAddress(addr)
 		me := NewContact(id, addr)
 		rt := NewRoutingTable(me)
-		kad := NewKademlia(me, nil, rt, 0)
+		kad := NewKademlia(me, nil, rt, NewDataStore(), 0)
 
 		resNil := kad.LookupContact(nil)
 		if len(resNil) != 0 {
@@ -78,7 +82,7 @@ func TestKademlia_LookupContact(t *testing.T) {
 		id := NewKademliaIDFromAddress(addr)
 		me := NewContact(id, addr)
 		rt := NewRoutingTable(me)
-		kad := NewKademlia(me, nil, rt, 0)
+		kad := NewKademlia(me, nil, rt, NewDataStore(), 0)
 
 		resNilID := kad.LookupContactByID(nil)
 		if len(resNilID) != 0 {
@@ -90,7 +94,7 @@ func TestKademlia_LookupContact(t *testing.T) {
 		addr := "127.0.0.1:8051"
 		id := NewKademliaIDFromAddress(addr)
 		me := NewContact(id, addr)
-		kadNilRT := NewKademlia(me, nil, nil, 0)
+		kadNilRT := NewKademlia(me, nil, nil, NewDataStore(), 0)
 
 		targetContact := NewContact(id, "")
 		resNilRT := kadNilRT.LookupContact(&targetContact)
@@ -104,7 +108,7 @@ func TestKademlia_LookupContact(t *testing.T) {
 		id := NewKademliaIDFromAddress(addr)
 		me := NewContact(id, addr)
 		rt := NewRoutingTable(me)
-		kad := NewKademlia(me, nil, rt, 0)
+		kad := NewKademlia(me, nil, rt, NewDataStore(), 0)
 
 		c1 := NewContact(NewKademliaID("1000000000000000000000000000000000000000000000000000000000000000"), "127.0.0.1:8052")
 		rt.AddContact(c1)
@@ -295,7 +299,7 @@ func TestKademlia_Join(t *testing.T) {
 	})
 
 	t.Run("Nil routing table returns error", func(t *testing.T) {
-		kadNilRT := NewKademlia(kadA.Me, kadA.Network, nil, 0)
+		kadNilRT := NewKademlia(kadA.Me, kadA.Network, nil, kadA.DataStore, 0)
 		if err := kadNilRT.Join(kadB.Me); err == nil {
 			t.Errorf("expected error joining with nil routing table")
 		}
@@ -326,6 +330,144 @@ func TestKademlia_Join(t *testing.T) {
 			if gotBucket != bucket {
 				t.Errorf("for bucket %d, generated ID landed in bucket %d", bucket, gotBucket)
 			}
+		}
+	})
+}
+
+func TestKademlia_StoreAndLookupData(t *testing.T) {
+	hub := NewSimulatedHub()
+
+	kadA, cleanupA := setupTestNode(t, "1000000000000000000000000000000000000000000000000000000000000000", 3, hub)
+	defer cleanupA()
+
+	kadB, cleanupB := setupTestNode(t, "2000000000000000000000000000000000000000000000000000000000000000", 3, hub)
+	defer cleanupB()
+
+	kadC, cleanupC := setupTestNode(t, "3000000000000000000000000000000000000000000000000000000000000000", 3, hub)
+	defer cleanupC()
+
+	// Connect nodes in routing tables
+	kadA.RoutingTable.AddContact(kadB.Me)
+	kadB.RoutingTable.AddContact(kadA.Me)
+	kadB.RoutingTable.AddContact(kadC.Me)
+	kadC.RoutingTable.AddContact(kadB.Me)
+
+	t.Run("Empty data returns error", func(t *testing.T) {
+		_, err := kadA.Store([]byte{})
+		if err == nil {
+			t.Errorf("expected error storing empty data")
+		}
+	})
+
+	t.Run("Nil target ID returns error", func(t *testing.T) {
+		_, _, err := kadA.LookupDataByID(nil)
+		if err == nil {
+			t.Errorf("expected error looking up nil target ID")
+		}
+	})
+
+	t.Run("Missing key returns ErrValueNotFound", func(t *testing.T) {
+		missingKey := NewKademliaID("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+		_, _, err := kadA.LookupDataByID(missingKey)
+		if !errors.Is(err, ErrValueNotFound) {
+			t.Errorf("expected ErrValueNotFound, got %v", err)
+		}
+	})
+
+	t.Run("Store and LookupData across network", func(t *testing.T) {
+		data := []byte("distributed package version 1.0.0 binary content")
+		key, err := kadA.Store(data)
+		if err != nil {
+			t.Fatalf("expected Store to succeed, got: %v", err)
+		}
+
+		// Node A should have it stored locally
+		if !kadA.DataStore.Has(*key) {
+			t.Errorf("expected Node A to store data locally")
+		}
+
+		// Node B should also have it stored (closest node)
+		if !kadB.DataStore.Has(*key) {
+			t.Errorf("expected Node B to have received STORE RPC")
+		}
+
+		// Node C does not have it locally
+		if kadC.DataStore.Has(*key) {
+			kadC.DataStore.Delete(*key)
+		}
+
+		// Node C performs iterative LookupData(key.String())
+		retrieved, responder, err := kadC.LookupData(key.String())
+		if err != nil {
+			t.Fatalf("expected LookupData to succeed, got: %v", err)
+		}
+
+		if string(retrieved) != string(data) {
+			t.Errorf("expected retrieved data %s, got %s", string(data), string(retrieved))
+		}
+
+		if responder == nil {
+			t.Errorf("expected responder contact to be returned")
+		}
+
+		// Node C should have cached the value locally in its DataStore
+		if !kadC.DataStore.Has(*key) {
+			t.Errorf("expected Node C to cache the looked up value locally")
+		}
+	})
+
+	t.Run("Replicate republishes stored values", func(t *testing.T) {
+		kadD, cleanupD := setupTestNode(t, "4000000000000000000000000000000000000000000000000000000000000000", 3, hub)
+		defer cleanupD()
+
+		kadB.RoutingTable.AddContact(kadD.Me)
+		kadD.RoutingTable.AddContact(kadB.Me)
+
+		val := []byte("replicated package blob")
+		key := NewKademliaIDFromData(val)
+
+		// Directly put in Node B's local datastore without network store
+		_ = kadB.DataStore.Store(*key, val)
+
+		// Node D does not have it
+		if kadD.DataStore.Has(*key) {
+			kadD.DataStore.Delete(*key)
+		}
+
+		// Node B triggers Replicate()
+		kadB.Replicate()
+
+		// Give async goroutine a brief moment to dispatch
+		time.Sleep(20 * time.Millisecond)
+
+		// Verify Node D now has the replicated data
+		if !kadD.DataStore.Has(*key) {
+			t.Errorf("expected Node D to receive replicated key")
+		}
+	})
+
+	t.Run("Corrupted data with hash mismatch is discarded by client", func(t *testing.T) {
+		validData := []byte("legit data")
+		key := NewKademliaIDFromData(validData)
+
+		// Tampered node B has corrupted data stored under key
+		corruptedDS := NewDataStore()
+		corruptedDS.StoreUnchecked(*key, []byte("tampered evil content"))
+		kadB.DataStore = corruptedDS
+		if netB, ok := kadB.Network.(*SimulatedNetwork); ok {
+			netB.ds = corruptedDS
+		}
+
+		// Node C does not have the data
+		kadC.DataStore.Delete(*key)
+
+		// Node C queries for key -> receives corrupted data from B -> must discard it and fail with ErrValueNotFound
+		res, _, err := kadC.LookupData(key.String())
+		if res != nil {
+			t.Errorf("expected client to discard corrupted data, but got %s", string(res))
+		}
+		if !errors.Is(err, ErrValueNotFound) {
+			t.Errorf("expected ErrValueNotFound after discarding corrupted data, got %v", err)
 		}
 	})
 }

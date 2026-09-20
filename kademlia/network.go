@@ -2,7 +2,6 @@ package kademlia
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -19,11 +18,14 @@ import (
 type RPCType string
 
 const (
-	Ping        RPCType = "PING"
-	Pong        RPCType = "PONG"
-	FindContact RPCType = "FIND_CONTACT"
-	FindData    RPCType = "FIND_DATA"
-	Store       RPCType = "STORE"
+	Ping             RPCType = "PING"
+	Pong             RPCType = "PONG"
+	FindContact      RPCType = "FIND_CONTACT"
+	FindContactReply RPCType = "FIND_CONTACT_REPLY"
+	FindData         RPCType = "FIND_DATA"
+	FindDataReply    RPCType = "FIND_DATA_REPLY"
+	Store            RPCType = "STORE"
+	StoreReply       RPCType = "STORE_REPLY"
 )
 
 // RPC responses must be unambiguously matched to the corresponding request.
@@ -44,21 +46,25 @@ type RPCMessage struct {
 type Network interface {
 	SendPingMessage(contact *Contact) (*RPCMessage, error)
 	SendFindContactMessage(target *KademliaID, contact *Contact) ([]Contact, error)
+	SendFindDataMessage(target *KademliaID, contact *Contact) ([]byte, []Contact, error)
+	SendStoreMessage(contact *Contact, key *KademliaID, data []byte) error
 }
 
 type UDPNetwork struct {
 	me      Contact
 	rt      *RoutingTable
+	ds      *DataStore
 	conn    *net.UDPConn
 	mu      sync.Mutex
 	pending map[uuid.UUID]chan RPCMessage
 	timeout time.Duration
 }
 
-func NewUDPNetwork(me Contact, rt *RoutingTable) *UDPNetwork {
+func NewUDPNetwork(me Contact, rt *RoutingTable, ds *DataStore) *UDPNetwork {
 	return &UDPNetwork{
 		me:      me,
 		rt:      rt,
+		ds:      ds,
 		pending: make(map[uuid.UUID]chan RPCMessage),
 	}
 }
@@ -143,12 +149,69 @@ func (n *UDPNetwork) SendFindContactMessage(target *KademliaID, contact *Contact
 	return res.Contacts, nil
 }
 
-func (network *UDPNetwork) SendFindDataMessage(hash string) {
-	// TODO
+// SendFindDataMessage sends a FIND_DATA RPC to contact looking for target.
+// Returns (data, nil, nil) if contact has the data.
+// Returns (nil, contacts, nil) if contact returns closest contacts.
+// Returns (nil, nil, err) if RPC fails or times out.
+func (n *UDPNetwork) SendFindDataMessage(target *KademliaID, contact *Contact) ([]byte, []Contact, error) {
+	if contact == nil || contact.ID == nil {
+		return nil, nil, fmt.Errorf("cannot query nil contact")
+	}
+	if target == nil {
+		return nil, nil, fmt.Errorf("target ID cannot be nil")
+	}
+
+	req := RPCMessage{
+		Type:          FindData,
+		TransactionID: uuid.New(),
+		Sender:        n.me,
+		TargetID:      target,
+	}
+
+	timeout := 1 * time.Second
+	n.mu.Lock()
+	if n.timeout > 0 {
+		timeout = n.timeout
+	}
+	n.mu.Unlock()
+
+	res, err := n.sendRPC(contact.Address, req, timeout)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if len(res.Data) > 0 {
+		return res.Data, nil, nil
+	}
+	return nil, res.Contacts, nil
 }
 
-func (network *UDPNetwork) SendStoreMessage(data []byte) {
-	// TODO
+// SendStoreMessage sends a STORE RPC to contact to store key and data.
+func (n *UDPNetwork) SendStoreMessage(contact *Contact, key *KademliaID, data []byte) error {
+	if contact == nil || contact.ID == nil {
+		return fmt.Errorf("cannot store to nil contact")
+	}
+	if key == nil {
+		return fmt.Errorf("key cannot be nil")
+	}
+
+	req := RPCMessage{
+		Type:          Store,
+		TransactionID: uuid.New(),
+		Sender:        n.me,
+		TargetID:      key,
+		Data:          data,
+	}
+
+	timeout := 1 * time.Second
+	n.mu.Lock()
+	if n.timeout > 0 {
+		timeout = n.timeout
+	}
+	n.mu.Unlock()
+
+	_, err := n.sendRPC(contact.Address, req, timeout)
+	return err
 }
 
 // ==================HELPERS==========================
@@ -242,6 +305,55 @@ func (n *UDPNetwork) handleMessage(msg RPCMessage, raddr *net.UDPAddr) {
 
 		data, _ := json.Marshal(reply)
 		n.conn.WriteToUDP(data, raddr)
+
+	case FindData:
+		reply := RPCMessage{
+			Type:          FindDataReply,
+			TransactionID: msg.TransactionID,
+			Sender:        n.me,
+		}
+
+		var val []byte
+		var found bool
+		if n.ds != nil && msg.TargetID != nil {
+			val, found = n.ds.Get(*msg.TargetID)
+		}
+
+		if found {
+			reply.Data = val
+		} else if n.rt != nil && msg.TargetID != nil {
+			closest := n.rt.FindClosestContacts(msg.TargetID, bucketSize)
+			filtered := make([]Contact, 0, len(closest))
+			for _, c := range closest {
+				if msg.Sender.ID != nil && c.ID != nil && c.ID.Equals(msg.Sender.ID) {
+					continue
+				}
+				if n.me.ID != nil && c.ID != nil && c.ID.Equals(n.me.ID) {
+					continue
+				}
+				filtered = append(filtered, c)
+			}
+			reply.Contacts = filtered
+		}
+
+		data, _ := json.Marshal(reply)
+		n.conn.WriteToUDP(data, raddr)
+
+	case Store:
+		if n.ds != nil && msg.TargetID != nil && msg.Data != nil {
+			if err := n.ds.Store(*msg.TargetID, msg.Data); err != nil {
+				slog.Warn("rejected STORE request", "err", err, "key", msg.TargetID)
+			}
+		}
+
+		reply := RPCMessage{
+			Type:          StoreReply,
+			TransactionID: msg.TransactionID,
+			Sender:        n.me,
+		}
+
+		data, _ := json.Marshal(reply)
+		n.conn.WriteToUDP(data, raddr)
 	}
 }
 
@@ -276,7 +388,7 @@ func (n *UDPNetwork) sendRPC(receiverAddr string, req RPCMessage, timeout time.D
 	conn := n.conn
 	n.mu.Unlock()
 	if conn == nil {
-		return RPCMessage{}, errors.New("network is closed")
+		return RPCMessage{}, fmt.Errorf("network is closed")
 	}
 
 	if _, err := conn.WriteToUDP(data, raddr); err != nil {
