@@ -96,14 +96,16 @@ func (h *SimulatedHub) ResetMetrics() {
 type SimulatedNetwork struct {
 	me  Contact
 	rt  *RoutingTable
+	ds  *DataStore
 	hub *SimulatedHub
 }
 
 // NewSimulatedNetwork creates a new SimulatedNetwork and registers it with the hub.
-func NewSimulatedNetwork(me Contact, rt *RoutingTable, hub *SimulatedHub) *SimulatedNetwork {
+func NewSimulatedNetwork(me Contact, rt *RoutingTable, hub *SimulatedHub, ds *DataStore) *SimulatedNetwork {
 	sn := &SimulatedNetwork{
 		me:  me,
 		rt:  rt,
+		ds:  ds,
 		hub: hub,
 	}
 	if hub != nil {
@@ -251,4 +253,146 @@ func (n *SimulatedNetwork) SendFindContactMessage(target *KademliaID, contact *C
 	}
 
 	return filtered, nil
+}
+
+// SendFindDataMessage sends an in-memory FIND_DATA to the target contact.
+// Returns (val, nil, nil) if the contact has the data.
+// Returns (nil, contacts, nil) if the contact does not have the data and returns closest contacts.
+// Returns (nil, nil, err) if node is unreachable or dropped.
+func (n *SimulatedNetwork) SendFindDataMessage(target *KademliaID, contact *Contact) ([]byte, []Contact, error) {
+	if contact == nil || contact.ID == nil {
+		return nil, nil, fmt.Errorf("cannot query nil contact")
+	}
+	if target == nil {
+		return nil, nil, fmt.Errorf("cannot query nil target ID")
+	}
+	if n.hub == nil {
+		return nil, nil, fmt.Errorf("simulated network hub is nil")
+	}
+
+	n.hub.totalProbes.Add(1)
+
+	n.hub.mu.RLock()
+	targetNet, exists := n.hub.nodes[contact.Address]
+	loss := n.hub.packetLoss
+	latency := n.hub.latency
+	n.hub.mu.RUnlock()
+
+	if latency > 0 {
+		time.Sleep(latency)
+	}
+
+	if loss > 0 {
+		n.hub.rngMu.Lock()
+		roll := n.hub.rng.Float64()
+		n.hub.rngMu.Unlock()
+		if roll < loss {
+			n.hub.droppedProbes.Add(1)
+			return nil, nil, fmt.Errorf("simulated network timeout (packet loss)")
+		}
+	}
+
+	if !exists || targetNet == nil {
+		n.hub.droppedProbes.Add(1)
+		return nil, nil, fmt.Errorf("node %s unreachable", contact.Address)
+	}
+
+	n.hub.successfulProbes.Add(1)
+
+	// Target updates its routing table with sender
+	if targetNet.rt != nil && n.me.ID != nil {
+		if targetNet.me.ID == nil || !n.me.ID.Equals(targetNet.me.ID) {
+			targetNet.rt.AddContact(n.me)
+		}
+	}
+
+	// Sender updates its routing table with target
+	if n.rt != nil && targetNet.me.ID != nil {
+		if n.me.ID == nil || !targetNet.me.ID.Equals(n.me.ID) {
+			n.rt.AddContact(targetNet.me)
+		}
+	}
+
+	// Check if target has the data in its datastore
+	if targetNet.ds != nil {
+		if val, found := targetNet.ds.Get(*target); found {
+			return val, nil, nil
+		}
+	}
+
+	// Not found: return closest contacts to target
+	var filtered []Contact
+	if targetNet.rt != nil {
+		closest := targetNet.rt.FindClosestContacts(target, bucketSize)
+		filtered = make([]Contact, 0, len(closest))
+		for _, c := range closest {
+			if c.ID == nil {
+				continue
+			}
+			if n.me.ID != nil && c.ID.Equals(n.me.ID) {
+				continue
+			}
+			if targetNet.me.ID != nil && c.ID.Equals(targetNet.me.ID) {
+				continue
+			}
+			filtered = append(filtered, c)
+		}
+	}
+
+	return nil, filtered, nil
+}
+
+// SendStoreMessage sends an in-memory STORE to the target contact.
+func (n *SimulatedNetwork) SendStoreMessage(contact *Contact, key *KademliaID, data []byte) error {
+	if contact == nil || contact.ID == nil {
+		return fmt.Errorf("cannot store to nil contact")
+	}
+	if key == nil {
+		return fmt.Errorf("key cannot be nil")
+	}
+	if n.hub == nil {
+		return fmt.Errorf("simulated network hub is nil")
+	}
+
+	n.hub.totalProbes.Add(1)
+
+	n.hub.mu.RLock()
+	targetNet, exists := n.hub.nodes[contact.Address]
+	loss := n.hub.packetLoss
+	latency := n.hub.latency
+	n.hub.mu.RUnlock()
+
+	if latency > 0 {
+		time.Sleep(latency)
+	}
+
+	if loss > 0 {
+		n.hub.rngMu.Lock()
+		roll := n.hub.rng.Float64()
+		n.hub.rngMu.Unlock()
+		if roll < loss {
+			n.hub.droppedProbes.Add(1)
+			return fmt.Errorf("simulated network timeout (packet loss)")
+		}
+	}
+
+	if !exists || targetNet == nil {
+		n.hub.droppedProbes.Add(1)
+		return fmt.Errorf("node %s unreachable", contact.Address)
+	}
+
+	n.hub.successfulProbes.Add(1)
+
+	// Target updates its routing table with sender
+	if targetNet.rt != nil && n.me.ID != nil {
+		if targetNet.me.ID == nil || !n.me.ID.Equals(targetNet.me.ID) {
+			targetNet.rt.AddContact(n.me)
+		}
+	}
+
+	// Store in target's datastore
+	if targetNet.ds != nil {
+		return targetNet.ds.Store(*key, data)
+	}
+	return nil
 }

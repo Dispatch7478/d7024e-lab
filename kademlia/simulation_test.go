@@ -19,8 +19,9 @@ func TestSimulation_1000Nodes(t *testing.T) {
 	bootstrapID := NewKademliaID(fmt.Sprintf("%064x", 1))
 	bootstrapContact := NewContact(bootstrapID, "sim:node0")
 	bootstrapRT := NewRoutingTable(bootstrapContact)
-	bootstrapNet := NewSimulatedNetwork(bootstrapContact, bootstrapRT, hub)
-	nodes[0] = NewKademlia(bootstrapContact, bootstrapNet, bootstrapRT, 3)
+	bootstrapDS := NewDataStore()
+	bootstrapNet := NewSimulatedNetwork(bootstrapContact, bootstrapRT, hub, bootstrapDS)
+	nodes[0] = NewKademlia(bootstrapContact, bootstrapNet, bootstrapRT, bootstrapDS, 3)
 
 	// Create remaining 999 nodes
 	for i := 1; i < totalNodes; i++ {
@@ -28,8 +29,9 @@ func TestSimulation_1000Nodes(t *testing.T) {
 		id := NewKademliaIDFromAddress(addr)
 		contact := NewContact(id, addr)
 		rt := NewRoutingTable(contact)
-		net := NewSimulatedNetwork(contact, rt, hub)
-		nodes[i] = NewKademlia(contact, net, rt, 3)
+		ds := NewDataStore()
+		net := NewSimulatedNetwork(contact, rt, hub, ds)
+		nodes[i] = NewKademlia(contact, net, rt, ds, 3)
 	}
 
 	t.Run("Bootstrap 1000 nodes into the network", func(t *testing.T) {

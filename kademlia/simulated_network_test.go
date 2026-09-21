@@ -11,13 +11,15 @@ func TestSimulatedNetwork(t *testing.T) {
 	idA := NewKademliaID("1000000000000000000000000000000000000000000000000000000000000000")
 	contactA := NewContact(idA, "sim:nodeA")
 	rtA := NewRoutingTable(contactA)
-	netA := NewSimulatedNetwork(contactA, rtA, hub)
+	dsA := NewDataStore()
+	netA := NewSimulatedNetwork(contactA, rtA, hub, dsA)
 	defer netA.Close()
 
 	idB := NewKademliaID("2000000000000000000000000000000000000000000000000000000000000000")
 	contactB := NewContact(idB, "sim:nodeB")
 	rtB := NewRoutingTable(contactB)
-	netB := NewSimulatedNetwork(contactB, rtB, hub)
+	dsB := NewDataStore()
+	netB := NewSimulatedNetwork(contactB, rtB, hub, dsB)
 	defer netB.Close()
 
 	t.Run("Ping success and metrics", func(t *testing.T) {
@@ -100,6 +102,46 @@ func TestSimulatedNetwork(t *testing.T) {
 		}
 		if elapsed < 15*time.Millisecond {
 			t.Errorf("expected elapsed time to be at least 15ms, got %v", elapsed)
+		}
+	})
+
+	t.Run("Store and FindData in SimulatedNetwork", func(t *testing.T) {
+		val := []byte("stored binary package data")
+		key := NewKademliaIDFromData(val)
+
+		// Node A stores data on Node B
+		if err := netA.SendStoreMessage(&contactB, key, val); err != nil {
+			t.Fatalf("expected store message to succeed, got: %v", err)
+		}
+
+		// Verify Node B has it in its datastore
+		if !dsB.Has(*key) {
+			t.Fatalf("expected node B to have stored the key")
+		}
+
+		// Node A finds data on Node B -> should return the data
+		foundData, closest, err := netA.SendFindDataMessage(key, &contactB)
+		if err != nil {
+			t.Fatalf("expected find data to succeed, got: %v", err)
+		}
+		if string(foundData) != string(val) {
+			t.Errorf("expected found data %s, got %s", string(val), string(foundData))
+		}
+		if len(closest) != 0 {
+			t.Errorf("expected 0 closest contacts when data is found, got %d", len(closest))
+		}
+
+		// Querying for missing key on Node B -> should return closest contacts
+		missingKey := NewKademliaID("9999999999999999999999999999999999999999999999999999999999999999")
+		missingData, missingClosest, err := netA.SendFindDataMessage(missingKey, &contactB)
+		if err != nil {
+			t.Fatalf("expected find data to succeed, got: %v", err)
+		}
+		if len(missingData) != 0 {
+			t.Errorf("expected nil/empty data for missing key, got %s", string(missingData))
+		}
+		if len(missingClosest) == 0 {
+			t.Errorf("expected non-empty contacts returned for missing key")
 		}
 	})
 }
