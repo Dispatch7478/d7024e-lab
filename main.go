@@ -34,13 +34,14 @@ func main() {
 	slog.Info("Starting node", "address", listenAddr, "id", id.String())
 
 	rt := kademlia.NewRoutingTable(me)
-	network := kademlia.NewUDPNetwork(me, rt)
+	ds := kademlia.NewDataStore()
+	network := kademlia.NewUDPNetwork(me, rt, ds)
 	if err := network.Listen(ip, port); err != nil {
 		slog.Error("failed to listen", "err", err)
 		os.Exit(1)
 	}
 
-	kad := kademlia.NewKademlia(me, network, rt, 0)
+	kad := kademlia.NewKademlia(me, network, rt, ds, 0)
 
 	bootstrapIP := os.Getenv("BOOTSTRAP_IP")
 	if bootstrapIP != "" && bootstrapIP != localIP {
