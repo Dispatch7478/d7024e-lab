@@ -71,9 +71,11 @@ func ShowBanner(kad *kademlia.Kademlia) {
 	fmt.Println("==================================================")
 	fmt.Println(`Options:
 - PING <IP:PORT>
-- LOOKUP <Recipient_IP:PORT> <Target_HexID>
-- RT
+- PUT <filename>
+- GET <KEY> <optional: filename>
 - EXIT
+- RT
+- DS 
 --------------------------------------------------`)
 }
 
@@ -140,65 +142,89 @@ func runCLI(kad *kademlia.Kademlia) {
 				fmt.Printf("%-4d | %-11s | %-21s\n", i+1, truncateID(c.ID.String()), c.Address)
 			}
 
-		// Lookup from nodeA to NodeB about target
-		case "LOOKUP":
-			if len(fields) != 3 {
-				fmt.Println("Error: Lookup requires exactly two arguments: Recipient_IP:PORT Target-ID")
-				continue
+		case "PUT":
+			if len(fields) != 2 {
+				fmt.Printf("Error: PUT requires exactly 1 argument: PUT <filename>\n")
+				continue 
 			}
+			filename := fields[1]
 
-			recipientAddr := fields[1]
-			targetHex := fields[2]
-
-			// validate IP:PORT format
-			if ip, port, ok := strings.Cut(recipientAddr, ":"); !ok || port == "" || ip == "" {
-				fmt.Println("Error: Invalid Node format, expected IP:PORT")
-				continue
-			}
-
-			// Validate hex format of ID
-			if len(targetHex) != 64 {
-				fmt.Println("Error: Target ID must be 64-character hexadecimal string")
-				continue
-			}
-
-			// search for recipient in routing table
-			var recipientContact *kademlia.Contact
-			for _, neighbor := range kad.RoutingTable.GetAllContacts() {
-				if neighbor.Address == recipientAddr {
-					c := neighbor
-					recipientContact = &c
-					break
-				}
-			}
-
-			if recipientContact == nil {
-				fmt.Println("Error: recipient not in routing table")
-				continue
-			}
-
-			targetID := kademlia.NewKademliaID(targetHex)
-
-			fmt.Printf("Querying %s for contacts closest to %s... \n", recipientContact.Address, truncateID(targetID.String()))
-			contacts, err := kad.Network.SendFindContactMessage(targetID, recipientContact)
+			// read file contents
+			data, err := os.ReadFile(filename)
 			if err != nil {
-				fmt.Printf("Lookup error: %v\n", err)
-				continue
-			}
-			if len(contacts) == 0 {
-				fmt.Println("Recipient returned 0 contacts")
-				continue
+				fmt.Printf("Error reading file '%s': %v \n", filename, err)
+				continue 
+			} 
+
+			// pass data to store function 
+			key, err := kad.Store(data)
+			if err != nil {
+				fmt.Printf("Error storing data: %v\n", err)
+				continue 
 			}
 
-			fmt.Printf("Success! Received %d closest contacts from %s \n", len(contacts), recipientContact.Address)
-			for i, contact := range contacts {
-				fmt.Printf("[%d] ID: %s | Address: %s \n", i+1, truncateID(contact.ID.String()), contact.Address)
+			// print key
+			fmt.Printf("File '%s' has been stored successfully!\n", filename)
+			fmt.Printf("Key: %s \n", key.String())
+	
+		case "GET":
+			if len(fields) < 2 || len(fields) > 3 {
+				fmt.Printf("Error: GET requires either 2 or 3 arguments: GET <Key> <optional: filename>")
+				continue 
+			}
+
+			keyHex := strings.TrimSpace(fields[1])
+			key := kademlia.NewKademliaID(keyHex)	
+
+			// retrieve data at key 
+			data, responderContact, err := kad.LookupDataByID(key)
+			if err != nil {
+				fmt.Printf("Error retrieving data from key '%s'", truncateID(key.String()))
+				continue
+
+			}
+			// if filename is given
+			if len(fields) == 3 {
+				filename := fields[2]
+				err := os.WriteFile(filename, data, 0644)
+				if err != nil{
+					fmt.Printf("Error saving file '%s': %v \n", filename, err)
+					continue 
+				}
+				fmt.Printf("Data saved to file '%s'\n", filename)
+			} else {
+				// if filename is not given 
+				// print key and data to user 
+				fmt.Printf("Key: %s | Bytes: %d | Data: %q\n", truncateID(key.String()), len(data), string(data))
+			}
+			if responderContact != nil {
+				fmt.Printf("Recieved from node: %s (ID: %s)\n", responderContact.Address, truncateID(responderContact.ID.String()))
+			}
+
+
+		case "DS":
+    	// Dump all stored key-value pairs in this node's local store
+    	if kad.DataStore == nil {
+				fmt.Println("DataStore not initialized.")
+				continue
+			}
+			keys := kad.DataStore.GetAllKeys()
+			if len(keys) == 0 {
+				fmt.Println("DataStore is currently empty.")
+				continue
+			}
+			fmt.Printf("DataStore has %d items:\n", len(keys))
+			for i, k := range keys {
+				val, _ := kad.DataStore.Get(k)
+				fmt.Printf("[%d] Key: %s | Bytes: %d | Data: %q\n", 
+					i+1, truncateID(k.String()), len(val), string(val))
 			}
 
 		default:
 			fmt.Println("Unknown command. Type 'ping', 'lookup', 'rt', or 'exit'.")
 		}
 	}
+	
 }
 
 // Truncates ID to last- and first 4 characters

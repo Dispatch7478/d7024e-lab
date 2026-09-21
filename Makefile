@@ -21,7 +21,7 @@ logs:
 	docker compose logs -f 
 
 attach: 
-	docker attach d7024e-lab-kademliaNodes-${NODE}
+	-docker attach --detach-keys="ctrl-c" d7024e-lab-kademliaNodes-$(NODE)
 
 attach-bootstrap:
 	docker attach kademlia-bootstrap
