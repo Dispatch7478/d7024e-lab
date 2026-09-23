@@ -90,3 +90,34 @@ func TestGetContactAndCalcDistance(t *testing.T) {
 		t.Errorf("expected distance %s, got %s", expectedDistance, contacts[0].distance)
 	}
 }
+
+func TestBucket_RemoveContact(t *testing.T) {
+	b := newBucket()
+	c1 := NewContact(NewKademliaID("0000000000000000000000000000000000000000000000000000000000000001"), "localhost:8081")
+	c2 := NewContact(NewKademliaID("0000000000000000000000000000000000000000000000000000000000000002"), "localhost:8082")
+
+	b.AddContact(c1)
+	b.AddContact(c2)
+
+	if b.Len() != 2 {
+		t.Fatalf("expected bucket len 2, got %d", b.Len())
+	}
+
+	// Remove c1
+	if !b.RemoveContact(c1) {
+		t.Errorf("expected RemoveContact to return true for existing contact")
+	}
+	if b.Len() != 1 {
+		t.Errorf("expected bucket len 1 after remove, got %d", b.Len())
+	}
+
+	// Remove c1 again -> false
+	if b.RemoveContact(c1) {
+		t.Errorf("expected RemoveContact to return false for already removed contact")
+	}
+
+	// Remove nil contact -> false
+	if b.RemoveContact(Contact{}) {
+		t.Errorf("expected RemoveContact with nil ID to return false")
+	}
+}

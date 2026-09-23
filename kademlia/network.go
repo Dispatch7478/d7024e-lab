@@ -216,7 +216,7 @@ func (n *UDPNetwork) SendStoreMessage(contact *Contact, key *KademliaID, data []
 
 // ==================HELPERS==========================
 
-// updateRoutingTable adds contact c to the local routing table if valid and not self.
+// updateRoutingTable updates contact c in the local routing table with async ping-eviction.
 func (n *UDPNetwork) updateRoutingTable(c Contact) {
 	if n.rt == nil || c.ID == nil {
 		return
@@ -224,7 +224,10 @@ func (n *UDPNetwork) updateRoutingTable(c Contact) {
 	if n.me.ID != nil && c.ID.Equals(n.me.ID) {
 		return
 	}
-	n.rt.AddContact(c)
+	n.rt.UpdateWithPing(c, func(target Contact) error {
+		_, err := n.SendPingMessage(&target)
+		return err
+	})
 }
 
 func (n *UDPNetwork) listenLoop() {

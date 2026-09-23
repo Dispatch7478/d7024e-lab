@@ -471,3 +471,87 @@ func TestKademlia_StoreAndLookupData(t *testing.T) {
 		}
 	})
 }
+
+func TestKademlia_ReplicationWorker(t *testing.T) {
+	hub := NewSimulatedHub()
+	defer hub.ResetMetrics()
+
+	idA := NewKademliaID("0000000000000000000000000000000000000000000000000000000000000001")
+	idB := NewKademliaID("0000000000000000000000000000000000000000000000000000000000000002")
+
+	contactA := NewContact(idA, "10.0.0.1:8000")
+	contactB := NewContact(idB, "10.0.0.2:8000")
+
+	rtA := NewRoutingTable(contactA)
+	rtB := NewRoutingTable(contactB)
+
+	dsA := NewDataStore()
+	dsB := NewDataStore()
+
+	netA := NewSimulatedNetwork(contactA, rtA, hub, dsA)
+	netB := NewSimulatedNetwork(contactB, rtB, hub, dsB)
+	defer netA.Close()
+	defer netB.Close()
+
+	kadA := NewKademlia(contactA, netA, rtA, dsA, 3)
+	kadB := NewKademlia(contactB, netB, rtB, dsB, 3)
+
+	rtA.AddContact(contactB)
+	rtB.AddContact(contactA)
+
+	t.Run("Replication worker replicates periodically", func(t *testing.T) {
+		val := []byte("periodic replication test payload")
+		key := NewKademliaIDFromData(val)
+
+		// Store only in Node A
+		_ = kadA.DataStore.Store(*key, val)
+
+		// Verify Node B does not have it initially
+		if kadB.DataStore.Has(*key) {
+			kadB.DataStore.Delete(*key)
+		}
+
+		// Start worker on Node A with a fast 25ms interval
+		kadA.StartReplicationWorker(25 * time.Millisecond)
+		defer kadA.StopReplicationWorker()
+
+		// Poll until Node B receives the data via worker replication
+		replicated := false
+		for i := 0; i < 20; i++ {
+			time.Sleep(10 * time.Millisecond)
+			if kadB.DataStore.Has(*key) {
+				replicated = true
+				break
+			}
+		}
+
+		if !replicated {
+			t.Errorf("expected replication worker to replicate key to peer within deadline")
+		}
+	})
+
+	t.Run("StopReplicationWorker is clean and idempotent", func(t *testing.T) {
+		kad := NewKademlia(contactA, netA, rtA, dsA, 3)
+		// Stopping when not started should not panic
+		kad.StopReplicationWorker()
+
+		kad.StartReplicationWorker(20 * time.Millisecond)
+		kad.StopReplicationWorker()
+		// Calling stop a second time should not panic
+		kad.StopReplicationWorker()
+	})
+
+	t.Run("StartReplicationWorker handles default interval and restarts", func(t *testing.T) {
+		kad := NewKademlia(contactA, netA, rtA, dsA, 3)
+		kad.StartReplicationWorker(0)
+		if kad.replicationInterval != DefaultReplicationInterval {
+			t.Errorf("expected default interval %v, got %v", DefaultReplicationInterval, kad.replicationInterval)
+		}
+		// Restart with different interval
+		kad.StartReplicationWorker(50 * time.Millisecond)
+		if kad.replicationInterval != 50*time.Millisecond {
+			t.Errorf("expected updated interval 50ms, got %v", kad.replicationInterval)
+		}
+		kad.StopReplicationWorker()
+	})
+}

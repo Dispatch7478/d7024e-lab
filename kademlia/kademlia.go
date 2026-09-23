@@ -5,9 +5,13 @@ import (
 	"log/slog"
 	"math/rand"
 	"sync"
+	"time"
 )
 
-const defaultAlpha = 3
+const (
+	defaultAlpha               = 3
+	DefaultReplicationInterval = 1 * time.Hour
+)
 
 var (
 	// ErrValueNotFound is returned when an iterative value lookup fails to locate the key.
@@ -16,11 +20,15 @@ var (
 
 // Kademlia represents a node in the Kademlia network.
 type Kademlia struct {
-	Me           Contact
-	RoutingTable *RoutingTable
-	Network      Network
-	DataStore    *DataStore
-	alpha        int
+	Me                  Contact
+	RoutingTable        *RoutingTable
+	Network             Network
+	DataStore           *DataStore
+	alpha               int
+	workerMu            sync.Mutex
+	replicationInterval time.Duration
+	stopReplication     chan struct{}
+	replicateWg         sync.WaitGroup
 }
 
 // NewKademlia returns a new Kademlia instance.
@@ -94,6 +102,13 @@ func (kademlia *Kademlia) LookupContactByID(target *KademliaID) []Contact {
 		results := make(chan probeResult, len(probes))
 
 		for _, contact := range probes {
+			slog.Debug("sending lookup probe",
+				"event", "lookup_probe",
+				"type", "find_node",
+				"target", target.String(),
+				"to_id", contact.ID.String(),
+				"to_address", contact.Address,
+			)
 			go func(c Contact) {
 				found, err := kademlia.Network.SendFindContactMessage(target, &c)
 				results <- probeResult{contact: c, contacts: found, err: err}
@@ -103,9 +118,21 @@ func (kademlia *Kademlia) LookupContactByID(target *KademliaID) []Contact {
 		for i := 0; i < len(probes); i++ {
 			res := <-results
 			if res.err != nil { // Unresponsive
-				slog.Error("failed to contact node", slog.Any("contact", res.contact.ID), slog.Any("err", res.err))
+				slog.Warn("dead node detected",
+					"event", "dead_node_detected",
+					"type", "find_node",
+					"contact_id", res.contact.ID.String(),
+					"address", res.contact.Address,
+					"err", res.err.Error(),
+				)
 				shortlist.MarkUnresponsive(res.contact.ID)
 			} else { // Responsive
+				slog.Debug("received probe response",
+					"event", "probe_response",
+					"type", "find_node",
+					"from_id", res.contact.ID.String(),
+					"contacts_count", len(res.contacts),
+				)
 				shortlist.MarkQueried(res.contact.ID)
 
 				if kademlia.RoutingTable != nil {
@@ -126,7 +153,22 @@ func (kademlia *Kademlia) LookupContactByID(target *KademliaID) []Contact {
 
 	// Return the bucketSize closest queried responsive nodes
 	// which is either k or less
-	return shortlist.GetClosestQueried(bucketSize)
+	closest := shortlist.GetClosestQueried(bucketSize)
+	if len(closest) > 0 {
+		slog.Info("node lookup completed",
+			"event", "lookup_success",
+			"type", "find_node",
+			"target", target.String(),
+			"closest_count", len(closest),
+		)
+	} else {
+		slog.Warn("node lookup failed",
+			"event", "lookup_failure",
+			"type", "find_node",
+			"target", target.String(),
+		)
+	}
+	return closest
 }
 
 // Join joins the Kademlia network using a bootstrap contact.
@@ -201,6 +243,13 @@ func (kademlia *Kademlia) Store(data []byte) (*KademliaID, error) {
 	}
 	wg.Wait()
 
+	slog.Info("stored data locally and across network",
+		"event", "store_data",
+		"key", key.String(),
+		"bytes", len(data),
+		"replicas", len(closest),
+	)
+
 	return key, nil
 }
 
@@ -220,11 +269,23 @@ func (kademlia *Kademlia) LookupDataByID(target *KademliaID) ([]byte, *Contact, 
 	// Check local DataStore first
 	if kademlia.DataStore != nil {
 		if val, found := kademlia.DataStore.Get(*target); found {
+			slog.Info("data lookup succeeded (local hit)",
+				"event", "lookup_success",
+				"type", "find_data",
+				"target", target.String(),
+				"local", true,
+				"bytes", len(val),
+			)
 			return val, &kademlia.Me, nil
 		}
 	}
 
 	if kademlia.RoutingTable == nil || kademlia.Network == nil {
+		slog.Warn("data lookup failed: network or routing table nil",
+			"event", "lookup_failure",
+			"type", "find_data",
+			"target", target.String(),
+		)
 		return nil, nil, ErrValueNotFound
 	}
 
@@ -234,6 +295,11 @@ func (kademlia *Kademlia) LookupDataByID(target *KademliaID) ([]byte, *Contact, 
 	shortlist.Add(initialContacts...)
 
 	if shortlist.Len() == 0 {
+		slog.Warn("data lookup failed: shortlist empty",
+			"event", "lookup_failure",
+			"type", "find_data",
+			"target", target.String(),
+		)
 		return nil, nil, ErrValueNotFound
 	}
 
@@ -254,6 +320,13 @@ func (kademlia *Kademlia) LookupDataByID(target *KademliaID) ([]byte, *Contact, 
 		results := make(chan probeResult, len(probes))
 
 		for _, contact := range probes {
+			slog.Debug("sending find_data probe",
+				"event", "lookup_probe",
+				"type", "find_data",
+				"target", target.String(),
+				"to_id", contact.ID.String(),
+				"to_address", contact.Address,
+			)
 			go func(c Contact) {
 				data, contacts, err := kademlia.Network.SendFindDataMessage(target, &c)
 				results <- probeResult{
@@ -268,7 +341,13 @@ func (kademlia *Kademlia) LookupDataByID(target *KademliaID) ([]byte, *Contact, 
 		for i := 0; i < len(probes); i++ {
 			res := <-results
 			if res.err != nil {
-				slog.Error("failed to contact node during find_data", slog.Any("contact", res.contact.ID), slog.Any("err", res.err))
+				slog.Warn("dead node detected during data lookup",
+					"event", "dead_node_detected",
+					"type", "find_data",
+					"contact_id", res.contact.ID.String(),
+					"address", res.contact.Address,
+					"err", res.err.Error(),
+				)
 				shortlist.MarkUnresponsive(res.contact.ID)
 				continue
 			}
@@ -285,9 +364,12 @@ func (kademlia *Kademlia) LookupDataByID(target *KademliaID) ([]byte, *Contact, 
 				expectedHash := NewKademliaIDFromData(res.data)
 				if !expectedHash.Equals(target) {
 					slog.Error("discarding corrupted value from remote peer: hash mismatch",
-						"expected_key", target.String(),
+						"event", "corrupt_data_discarded",
+						"target", target.String(),
 						"actual_hash", expectedHash.String(),
-						"sender", res.contact.Address)
+						"sender_id", res.contact.ID.String(),
+						"sender_address", res.contact.Address,
+					)
 					// Discard corrupted value and continue searching
 					continue
 				}
@@ -296,6 +378,15 @@ func (kademlia *Kademlia) LookupDataByID(target *KademliaID) ([]byte, *Contact, 
 				if kademlia.DataStore != nil {
 					_ = kademlia.DataStore.Store(*target, res.data)
 				}
+
+				slog.Info("data lookup succeeded",
+					"event", "lookup_success",
+					"type", "find_data",
+					"target", target.String(),
+					"from_id", res.contact.ID.String(),
+					"from_address", res.contact.Address,
+					"bytes", len(res.data),
+				)
 
 				return res.data, &res.contact, nil
 			}
@@ -310,6 +401,11 @@ func (kademlia *Kademlia) LookupDataByID(target *KademliaID) ([]byte, *Contact, 
 		}
 	}
 
+	slog.Warn("data lookup failed",
+		"event", "lookup_failure",
+		"type", "find_data",
+		"target", target.String(),
+	)
 	return nil, nil, ErrValueNotFound
 }
 
@@ -322,6 +418,15 @@ func (kademlia *Kademlia) Replicate() {
 
 	// For every value find the k closest nodes to the key K and store the value in them.
 	keys := kademlia.DataStore.GetAllKeys()
+	if len(keys) == 0 {
+		return
+	}
+
+	slog.Info("periodic replication pass started",
+		"event", "replication_started",
+		"keys_count", len(keys),
+	)
+
 	for _, key := range keys {
 		val, found := kademlia.DataStore.Get(key)
 		if !found {
@@ -331,16 +436,25 @@ func (kademlia *Kademlia) Replicate() {
 		targetContact := NewContact(&k, "")
 		closest := kademlia.LookupContact(&targetContact)
 
+		var storeWg sync.WaitGroup
 		for _, contact := range closest {
 			if kademlia.Me.ID != nil && contact.ID != nil && contact.ID.Equals(kademlia.Me.ID) {
 				continue
 			}
 			c := contact
+			storeWg.Add(1)
 			go func(c Contact, key KademliaID, data []byte) {
+				defer storeWg.Done()
 				_ = kademlia.Network.SendStoreMessage(&c, &key, data)
 			}(c, k, val)
 		}
+		storeWg.Wait()
 	}
+
+	slog.Info("periodic replication pass completed",
+		"event", "replication_completed",
+		"keys_count", len(keys),
+	)
 }
 
 // generateRandomIDForBucket returns a random KademliaID that falls within the distance range of bucket index.
@@ -374,4 +488,53 @@ func (kademlia *Kademlia) generateRandomIDForBucket(index int) *KademliaID {
 	}
 
 	return &target
+}
+
+// StartReplicationWorker starts a background ticker that periodically replicates data.
+func (kademlia *Kademlia) StartReplicationWorker(interval time.Duration) {
+	kademlia.workerMu.Lock()
+	defer kademlia.workerMu.Unlock()
+
+	// If already running, stop previous worker first
+	if kademlia.stopReplication != nil {
+		close(kademlia.stopReplication)
+		kademlia.replicateWg.Wait()
+		kademlia.stopReplication = nil
+	}
+
+	if interval <= 0 {
+		interval = DefaultReplicationInterval
+	}
+
+	kademlia.replicationInterval = interval
+	kademlia.stopReplication = make(chan struct{})
+	stopCh := kademlia.stopReplication
+	kademlia.replicateWg.Add(1)
+
+	go func() {
+		defer kademlia.replicateWg.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				kademlia.Replicate()
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+}
+
+// StopReplicationWorker halts the replication background worker cleanly.
+func (kademlia *Kademlia) StopReplicationWorker() {
+	kademlia.workerMu.Lock()
+	defer kademlia.workerMu.Unlock()
+
+	if kademlia.stopReplication != nil {
+		close(kademlia.stopReplication)
+		kademlia.replicateWg.Wait()
+		kademlia.stopReplication = nil
+	}
 }

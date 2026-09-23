@@ -15,6 +15,14 @@ import (
 )
 
 func main() {
+	// Configure structured logger
+	logLevel := slog.LevelInfo
+	if strings.ToUpper(os.Getenv("LOG_LEVEL")) == "DEBUG" {
+		logLevel = slog.LevelDebug
+	}
+	var handler slog.Handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})
+	slog.SetDefault(slog.New(handler))
+
 	portStr := getEnv("PORT", "8000")
 	port, _ := strconv.Atoi(portStr)
 	ip := getEnv("IP", "0.0.0.0")
@@ -59,6 +67,9 @@ func main() {
 			slog.Info("Successfully joined network via bootstrap", "bootstrap", bootstrapAddr)
 		}()
 	}
+
+	kad.StartReplicationWorker(kademlia.DefaultReplicationInterval)
+	defer kad.StopReplicationWorker()
 
 	runCLI(kad)
 }
@@ -145,7 +156,7 @@ func runCLI(kad *kademlia.Kademlia) {
 		case "PUT":
 			if len(fields) != 2 {
 				fmt.Printf("Error: PUT requires exactly 1 argument: PUT <filename>\n")
-				continue 
+				continue
 			}
 			filename := fields[1]
 
@@ -153,30 +164,30 @@ func runCLI(kad *kademlia.Kademlia) {
 			data, err := os.ReadFile(filename)
 			if err != nil {
 				fmt.Printf("Error reading file '%s': %v \n", filename, err)
-				continue 
-			} 
+				continue
+			}
 
-			// pass data to store function 
+			// pass data to store function
 			key, err := kad.Store(data)
 			if err != nil {
 				fmt.Printf("Error storing data: %v\n", err)
-				continue 
+				continue
 			}
 
 			// print key
 			fmt.Printf("File '%s' has been stored successfully!\n", filename)
 			fmt.Printf("Key: %s \n", key.String())
-	
+
 		case "GET":
 			if len(fields) < 2 || len(fields) > 3 {
 				fmt.Printf("Error: GET requires either 2 or 3 arguments: GET <Key> <optional: filename>")
-				continue 
+				continue
 			}
 
 			keyHex := strings.TrimSpace(fields[1])
-			key := kademlia.NewKademliaID(keyHex)	
+			key := kademlia.NewKademliaID(keyHex)
 
-			// retrieve data at key 
+			// retrieve data at key
 			data, responderContact, err := kad.LookupDataByID(key)
 			if err != nil {
 				fmt.Printf("Error retrieving data from key '%s'", truncateID(key.String()))
@@ -187,24 +198,23 @@ func runCLI(kad *kademlia.Kademlia) {
 			if len(fields) == 3 {
 				filename := fields[2]
 				err := os.WriteFile(filename, data, 0644)
-				if err != nil{
+				if err != nil {
 					fmt.Printf("Error saving file '%s': %v \n", filename, err)
-					continue 
+					continue
 				}
 				fmt.Printf("Data saved to file '%s'\n", filename)
 			} else {
-				// if filename is not given 
-				// print key and data to user 
+				// if filename is not given
+				// print key and data to user
 				fmt.Printf("Key: %s | Bytes: %d | Data: %q\n", truncateID(key.String()), len(data), string(data))
 			}
 			if responderContact != nil {
 				fmt.Printf("Recieved from node: %s (ID: %s)\n", responderContact.Address, truncateID(responderContact.ID.String()))
 			}
 
-
 		case "DS":
-    	// Dump all stored key-value pairs in this node's local store
-    	if kad.DataStore == nil {
+			// Dump all stored key-value pairs in this node's local store
+			if kad.DataStore == nil {
 				fmt.Println("DataStore not initialized.")
 				continue
 			}
@@ -216,7 +226,7 @@ func runCLI(kad *kademlia.Kademlia) {
 			fmt.Printf("DataStore has %d items:\n", len(keys))
 			for i, k := range keys {
 				val, _ := kad.DataStore.Get(k)
-				fmt.Printf("[%d] Key: %s | Bytes: %d | Data: %q\n", 
+				fmt.Printf("[%d] Key: %s | Bytes: %d | Data: %q\n",
 					i+1, truncateID(k.String()), len(val), string(val))
 			}
 
@@ -224,7 +234,7 @@ func runCLI(kad *kademlia.Kademlia) {
 			fmt.Println("Unknown command. Type 'ping', 'lookup', 'rt', or 'exit'.")
 		}
 	}
-	
+
 }
 
 // Truncates ID to last- and first 4 characters

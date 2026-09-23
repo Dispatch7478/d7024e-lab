@@ -1,6 +1,7 @@
 package kademlia
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -171,4 +172,237 @@ func TestRoutingTable(t *testing.T) {
 			t.Errorf("expected out of bounds 300 to report empty")
 		}
 	})
+
+	t.Run("RemoveContact evicts contact and updates bucket", func(t *testing.T) {
+		rt := NewRoutingTable(me)
+		c := NewContact(NewKademliaID("8000000000000000000000000000000000000000000000000000000000000000"), "localhost:1001")
+		rt.AddContact(c)
+
+		if rt.IsBucketEmpty(0) {
+			t.Fatalf("expected bucket 0 to contain contact")
+		}
+
+		// Evict contact
+		if !rt.RemoveContact(c) {
+			t.Errorf("expected RemoveContact to return true for existing contact")
+		}
+
+		if !rt.IsBucketEmpty(0) {
+			t.Errorf("expected bucket 0 to be empty after eviction")
+		}
+
+		// Second eviction should return false
+		if rt.RemoveContact(c) {
+			t.Errorf("expected RemoveContact to return false for already evicted contact")
+		}
+
+		// Evict nil contact
+		if rt.RemoveContact(Contact{}) {
+			t.Errorf("expected RemoveContact with nil ID to return false")
+		}
+	})
 }
+
+func TestRoutingTable_UpdateWithPing(t *testing.T) {
+	me := NewContact(NewKademliaID("0000000000000000000000000000000000000000000000000000000000000000"), "localhost:6767")
+
+	t.Run("Eviction occurs when oldest contact fails ping", func(t *testing.T) {
+		rt := NewRoutingTable(me)
+
+		// Fill bucket 0 (differs at MSB: starts with '8') with 10 contacts
+		var contacts []Contact
+		for i := 0; i < bucketSize; i++ {
+			idHex := fmt.Sprintf("800000000000000000000000000000000000000000000000000000000000000%x", i+1)
+			c := NewContact(NewKademliaID(idHex), fmt.Sprintf("10.0.0.%d:8000", i+1))
+			rt.AddContact(c)
+			contacts = append(contacts, c)
+		}
+
+		// The first added contact (contacts[0]) is at the tail/back
+		oldest := contacts[0]
+
+		// 11th candidate arrives for bucket 0
+		candidate := NewContact(NewKademliaID("80000000000000000000000000000000000000000000000000000000000000ff"), "10.0.0.99:8000")
+
+		pingedCount := 0
+		pinger := func(target Contact) error {
+			pingedCount++
+			if !target.ID.Equals(oldest.ID) {
+				t.Errorf("expected pinger to ping oldest contact %v, got %v", oldest.ID, target.ID)
+			}
+			return fmt.Errorf("ping timeout: node unreachable")
+		}
+
+		rt.UpdateWithPing(candidate, pinger)
+		rt.WaitEviction()
+
+		if pingedCount != 1 {
+			t.Fatalf("expected exactly 1 ping to be dispatched, got %d", pingedCount)
+		}
+
+		bucket0 := rt.buckets[0]
+		if bucket0.Len() != bucketSize {
+			t.Errorf("expected bucket len to remain %d, got %d", bucketSize, bucket0.Len())
+		}
+
+		// Oldest must be evicted
+		for e := bucket0.list.Front(); e != nil; e = e.Next() {
+			if e.Value.(Contact).ID.Equals(oldest.ID) {
+				t.Errorf("expected oldest contact %s to be evicted, but still present", oldest.ID)
+			}
+		}
+
+		// Candidate must be added
+		foundCandidate := false
+		for e := bucket0.list.Front(); e != nil; e = e.Next() {
+			if e.Value.(Contact).ID.Equals(candidate.ID) {
+				foundCandidate = true
+				break
+			}
+		}
+		if !foundCandidate {
+			t.Errorf("expected candidate %s to be added after eviction", candidate.ID)
+		}
+	})
+
+	t.Run("Oldest contact is promoted and candidate discarded when ping succeeds", func(t *testing.T) {
+		rt := NewRoutingTable(me)
+
+		// Fill bucket 0 with 10 contacts
+		var contacts []Contact
+		for i := 0; i < bucketSize; i++ {
+			idHex := fmt.Sprintf("800000000000000000000000000000000000000000000000000000000000000%x", i+1)
+			c := NewContact(NewKademliaID(idHex), fmt.Sprintf("10.0.0.%d:8000", i+1))
+			rt.AddContact(c)
+			contacts = append(contacts, c)
+		}
+
+		oldest := contacts[0]
+		candidate := NewContact(NewKademliaID("80000000000000000000000000000000000000000000000000000000000000ff"), "10.0.0.99:8000")
+
+		pinger := func(target Contact) error {
+			return nil // ping success (node alive)
+		}
+
+		rt.UpdateWithPing(candidate, pinger)
+		rt.WaitEviction()
+
+		bucket0 := rt.buckets[0]
+		if bucket0.Len() != bucketSize {
+			t.Errorf("expected bucket len %d, got %d", bucketSize, bucket0.Len())
+		}
+
+		// Oldest must now be at the front of bucket 0
+		front := bucket0.list.Front().Value.(Contact)
+		if !front.ID.Equals(oldest.ID) {
+			t.Errorf("expected oldest contact %s to be promoted to front, got %s", oldest.ID, front.ID)
+		}
+
+		// Candidate must NOT be present in active bucket (stays in replacement cache)
+		for e := bucket0.list.Front(); e != nil; e = e.Next() {
+			if e.Value.(Contact).ID.Equals(candidate.ID) {
+				t.Errorf("expected candidate %s to not be in active bucket, but was added", candidate.ID)
+			}
+		}
+
+		// Candidate must be in replacement cache waiting for future evictions
+		queued := rt.GetReplacementCandidates(0)
+		if len(queued) != 1 || !queued[0].ID.Equals(candidate.ID) {
+			t.Errorf("expected candidate to be queued in replacement cache, got %v", queued)
+		}
+	})
+
+	t.Run("FIFO promotion order when multiple candidates arrive during in-flight ping", func(t *testing.T) {
+		rt := NewRoutingTable(me)
+
+		// Fill bucket 0 with 10 contacts
+		for i := 0; i < bucketSize; i++ {
+			idHex := fmt.Sprintf("800000000000000000000000000000000000000000000000000000000000000%x", i+1)
+			c := NewContact(NewKademliaID(idHex), fmt.Sprintf("10.0.0.%d:8000", i+1))
+			rt.AddContact(c)
+		}
+
+		// Candidates A, B, C for bucket 0
+		candA := NewContact(NewKademliaID("80000000000000000000000000000000000000000000000000000000000000aa"), "10.0.0.101:8000")
+		candB := NewContact(NewKademliaID("80000000000000000000000000000000000000000000000000000000000000bb"), "10.0.0.102:8000")
+		candC := NewContact(NewKademliaID("80000000000000000000000000000000000000000000000000000000000000cc"), "10.0.0.103:8000")
+
+		pingRelease := make(chan struct{})
+		pinger := func(target Contact) error {
+			<-pingRelease
+			return fmt.Errorf("timeout: dead node")
+		}
+
+		// candA arrives -> triggers ping
+		rt.UpdateWithPing(candA, pinger)
+
+		// While ping is in flight, candB and candC arrive
+		rt.UpdateWithPing(candB, pinger)
+		rt.UpdateWithPing(candC, pinger)
+
+		// Verify replacement queue currently holds [candA, candB, candC]
+		queuedBefore := rt.GetReplacementCandidates(0)
+		if len(queuedBefore) != 3 {
+			t.Fatalf("expected 3 candidates in replacement queue, got %d", len(queuedBefore))
+		}
+
+		// Release the ping (fails)
+		close(pingRelease)
+		rt.WaitEviction()
+
+		// FIFO: candA (first to arrive) MUST be promoted into active bucket!
+		bucket0 := rt.buckets[0]
+		foundA := false
+		for e := bucket0.list.Front(); e != nil; e = e.Next() {
+			if e.Value.(Contact).ID.Equals(candA.ID) {
+				foundA = true
+				break
+			}
+		}
+		if !foundA {
+			t.Errorf("expected candA (first to arrive) to be promoted into active bucket")
+		}
+
+		// candB and candC must remain in the replacement queue in FIFO order [candB, candC]
+		queuedAfter := rt.GetReplacementCandidates(0)
+		if len(queuedAfter) != 2 {
+			t.Fatalf("expected 2 candidates remaining in replacement queue, got %d", len(queuedAfter))
+		}
+		if !queuedAfter[0].ID.Equals(candB.ID) || !queuedAfter[1].ID.Equals(candC.ID) {
+			t.Errorf("expected remaining replacement queue to be [candB, candC], got %v", queuedAfter)
+		}
+	})
+
+	t.Run("Replacement cache is bounded by replacementCacheSize", func(t *testing.T) {
+		rt := NewRoutingTable(me)
+
+		// Fill bucket 0 with 10 contacts
+		for i := 0; i < bucketSize; i++ {
+			idHex := fmt.Sprintf("800000000000000000000000000000000000000000000000000000000000000%x", i+1)
+			c := NewContact(NewKademliaID(idHex), fmt.Sprintf("10.0.0.%d:8000", i+1))
+			rt.AddContact(c)
+		}
+
+		pingerBlock := make(chan struct{})
+		pinger := func(target Contact) error {
+			<-pingerBlock
+			return nil
+		}
+
+		// Add 15 distinct candidates to full bucket 0
+		for i := 0; i < 15; i++ {
+			idHex := fmt.Sprintf("80000000000000000000000000000000000000000000000000000000000000%02x", i+16)
+			cand := NewContact(NewKademliaID(idHex), fmt.Sprintf("10.0.1.%d:8000", i))
+			rt.UpdateWithPing(cand, pinger)
+		}
+
+		queued := rt.GetReplacementCandidates(0)
+		if len(queued) != replacementCacheSize {
+			t.Errorf("expected replacement cache size to be bounded at %d, got %d", replacementCacheSize, len(queued))
+		}
+
+		close(pingerBlock)
+		rt.WaitEviction()
+	})
+}
+

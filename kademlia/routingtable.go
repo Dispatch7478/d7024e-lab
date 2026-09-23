@@ -1,8 +1,14 @@
 package kademlia
 
-import "sync"
+import (
+	"log/slog"
+	"sync"
+)
 
-const bucketSize = 10
+const (
+	bucketSize           = 10
+	replacementCacheSize = 10
+)
 
 // RoutingTable definition
 // keeps a refrence contact of me and an array of buckets
@@ -12,26 +18,196 @@ type RoutingTable struct {
 	// so  at most 256*20 = 5,120 total contacts per table.
 	buckets [IDLength * 8]*bucket
 	mu      sync.RWMutex
+
+	// Eviction ping coordination (FIFO replacement cache per bucket)
+	evictMu      sync.Mutex
+	inFlight     map[int]bool
+	replacements map[int][]Contact
+	evictWg      sync.WaitGroup
 }
 
 // NewRoutingTable returns a new instance of a RoutingTable
 func NewRoutingTable(me Contact) *RoutingTable {
-	routingTable := &RoutingTable{}
+	routingTable := &RoutingTable{
+		me:           me,
+		inFlight:     make(map[int]bool),
+		replacements: make(map[int][]Contact),
+	}
 	for i := range IDLength * 8 {
 		routingTable.buckets[i] = newBucket()
 	}
-	routingTable.me = me
 	return routingTable
 }
 
 // AddContact add a new contact to the correct Bucket
 func (routingTable *RoutingTable) AddContact(contact Contact) {
+	if contact.ID == nil {
+		return
+	}
 	routingTable.mu.Lock()
 	defer routingTable.mu.Unlock()
 
 	bucketIndex := routingTable.getBucketIndex(contact.ID)
 	bucket := routingTable.buckets[bucketIndex]
-	bucket.AddContact(contact)
+	if !bucket.AddContact(contact) {
+		slog.Debug("routing table bucket full, contact not added",
+			"event", "bucket_full",
+			"contact_id", contact.ID.String(),
+			"bucket_index", bucketIndex,
+		)
+	}
+}
+
+// UpdateWithPing implements Kademlia's ping-based eviction mechanism.
+// If the bucket has room or the candidate already exists, it updates the bucket immediately.
+// If the bucket is full, it retains the candidate as a replacement and asynchronously pings
+// the least-recently seen (oldest) contact in the bucket.
+// If the oldest contact fails to respond, it is evicted and replaced by the candidate.
+// If the oldest contact responds, it is promoted to the head and the candidate is discarded.
+func (routingTable *RoutingTable) UpdateWithPing(candidate Contact, pinger func(Contact) error) {
+	if candidate.ID == nil || (routingTable.me.ID != nil && candidate.ID.Equals(routingTable.me.ID)) {
+		return
+	}
+
+	routingTable.mu.Lock()
+	bucketIndex := routingTable.getBucketIndex(candidate.ID)
+	bucket := routingTable.buckets[bucketIndex]
+
+	// Try adding or promoting candidate
+	if bucket.AddContact(candidate) {
+		routingTable.mu.Unlock()
+		return
+	}
+
+	// Bucket is full. Get the least-recently seen contact (the tail)
+	oldestPtr := bucket.GetOldestContact()
+	routingTable.mu.Unlock()
+
+	if oldestPtr == nil || pinger == nil {
+		slog.Debug("routing table bucket full, candidate dropped",
+			"event", "bucket_full",
+			"contact_id", candidate.ID.String(),
+			"bucket_index", bucketIndex,
+		)
+		return
+	}
+
+	oldest := *oldestPtr
+
+	// Coordinate eviction probe and enqueue candidate into replacement cache (FIFO)
+	routingTable.evictMu.Lock()
+	queue := routingTable.replacements[bucketIndex]
+	alreadyInCache := false
+	for _, c := range queue {
+		if c.ID != nil && c.ID.Equals(candidate.ID) {
+			alreadyInCache = true
+			break
+		}
+	}
+	if !alreadyInCache {
+		if len(queue) >= replacementCacheSize {
+			// Bounded cache: drop the oldest entry to prevent unbounded growth
+			queue = queue[1:]
+		}
+		queue = append(queue, candidate)
+		routingTable.replacements[bucketIndex] = queue
+	}
+
+	if routingTable.inFlight[bucketIndex] {
+		// A probe is already active for this bucket; candidate safely queued in FIFO replacement cache
+		routingTable.evictMu.Unlock()
+		return
+	}
+	routingTable.inFlight[bucketIndex] = true
+	routingTable.evictWg.Add(1)
+	routingTable.evictMu.Unlock()
+
+	// Launch asynchronous eviction probe
+	go func(bIdx int, target Contact) {
+		defer routingTable.evictWg.Done()
+		defer func() {
+			routingTable.evictMu.Lock()
+			delete(routingTable.inFlight, bIdx)
+			routingTable.evictMu.Unlock()
+		}()
+
+		err := pinger(target)
+		if err != nil {
+			// Oldest node failed to respond -> dead. Evict it.
+			slog.Warn("dead node detected during eviction probe",
+				"event", "dead_node_detected",
+				"type", "eviction_probe",
+				"contact_id", target.ID.String(),
+				"address", target.Address,
+				"bucket_index", bIdx,
+				"err", err.Error(),
+			)
+
+			// Remove dead contact from the routing table
+			routingTable.RemoveContact(target)
+
+			// Pop the first candidate from the replacement queue (FIFO)
+			routingTable.evictMu.Lock()
+			var repl Contact
+			var hasRepl bool
+			if len(routingTable.replacements[bIdx]) > 0 {
+				repl = routingTable.replacements[bIdx][0]
+				routingTable.replacements[bIdx] = routingTable.replacements[bIdx][1:]
+				hasRepl = true
+			}
+			routingTable.evictMu.Unlock()
+
+			if hasRepl {
+				routingTable.AddContact(repl)
+			}
+		} else {
+			// Oldest node responded! Promote it to the front
+			routingTable.mu.Lock()
+			routingTable.buckets[bIdx].AddContact(target)
+			routingTable.mu.Unlock()
+
+			// The replacement candidates remain queued in replacements[bIdx] for future evictions.
+		}
+	}(bucketIndex, oldest)
+}
+
+// GetReplacementCandidates returns a copy of queued replacement candidates for bucketIndex.
+func (routingTable *RoutingTable) GetReplacementCandidates(bucketIndex int) []Contact {
+	routingTable.evictMu.Lock()
+	defer routingTable.evictMu.Unlock()
+
+	queue := routingTable.replacements[bucketIndex]
+	res := make([]Contact, len(queue))
+	copy(res, queue)
+	return res
+}
+
+// WaitEviction blocks until all active background eviction probes complete.
+func (routingTable *RoutingTable) WaitEviction() {
+	routingTable.evictWg.Wait()
+}
+
+// RemoveContact removes a contact from its bucket and logs the eviction event.
+func (routingTable *RoutingTable) RemoveContact(contact Contact) bool {
+	routingTable.mu.Lock()
+	defer routingTable.mu.Unlock()
+
+	if contact.ID == nil {
+		return false
+	}
+
+	bucketIndex := routingTable.getBucketIndex(contact.ID)
+	bucket := routingTable.buckets[bucketIndex]
+	removed := bucket.RemoveContact(contact)
+	if removed {
+		slog.Info("routing table eviction",
+			"event", "routing_table_eviction",
+			"contact_id", contact.ID.String(),
+			"address", contact.Address,
+			"bucket_index", bucketIndex,
+		)
+	}
+	return removed
 }
 
 // FindClosestContacts finds the count closest Contacts to the target in the RoutingTable
