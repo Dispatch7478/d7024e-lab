@@ -405,4 +405,3 @@ func TestRoutingTable_UpdateWithPing(t *testing.T) {
 		rt.WaitEviction()
 	})
 }
-
