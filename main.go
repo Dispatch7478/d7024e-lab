@@ -1,5 +1,3 @@
-// TODO: Add package documentation for `main`, like this:
-// Package main something something...
 package main
 
 import (
@@ -12,7 +10,18 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"errors"
 )
+
+var (
+	ErrContactNotFound = errors.New("contact not found")
+	ErrAmbigousPrefix = errors.New("ambigous prefix: multiple contacts matched")
+	ErrIncorrectFormat = errors.New("Incorrect format of input")
+)
+
+// ==============
+// MAIN FUNCTIONS
+// ==============
 
 func main() {
 	portStr := getEnv("PORT", "8000")
@@ -63,35 +72,26 @@ func main() {
 	runCLI(kad)
 }
 
-func ShowBanner(kad *kademlia.Kademlia) {
-	fmt.Println("==================================================")
-	fmt.Printf(" Kademlia Interactive CLI - Connected Node\n")
-	fmt.Printf(" ID:   %s\n", kad.Me.ID.String())
-	fmt.Printf(" ADDR: %s\n", kad.Me.Address)
-	fmt.Println("==================================================")
-	fmt.Println(`Options:
-- PING <IP:PORT>
-- PUT <filename>
-- GET <KEY> <optional: filename>
-- EXIT
-- RT
-- DS 
---------------------------------------------------`)
-}
 
+
+// RunCLI is the main interactive CLI function for displaying
+// and adding functionality to the cli in addition handles user input
 func runCLI(kad *kademlia.Kademlia) {
+	
 	scanner := bufio.NewScanner(os.Stdin)
-
+	
+	// Display menu
 	ShowBanner(kad)
 
+	// main loop
 	for {
+
 		fmt.Print("> ")
 		if !scanner.Scan() {
-			// If stdin reached EOF (e.g. non-interactive / daemon / swarm mode),
-			// block to keep node alive.
 			select {}
 		}
 
+		// recive input and split into fields
 		input := strings.TrimSpace(scanner.Text())
 		fields := strings.Fields(input)
 
@@ -100,56 +100,91 @@ func runCLI(kad *kademlia.Kademlia) {
 			continue
 		}
 
+		// Isolate main command: PING, RT, DS, GET, PUT
 		cmd := strings.ToUpper(fields[0])
 
+		// Swtich case for each command option 
 		switch cmd {
+		
+			// EXIT: Exit cli
 		case "EXIT":
 			fmt.Println("Thank you for using this kademlia interactive CLI!")
 			os.Stdin.Close()
 			return
 
-		// Pinging node A from node B
+			// PING: Pinging target node
 		case "PING":
+
+			// Validate input
 			if len(fields) != 2 {
-				fmt.Println("Error: Ping requires exactly one argument: IP:PORT")
+				fmt.Println("Error: Ping requires exactly one argument: <Unique ID prefix>")
 				continue
 			}
-			ip, port, ok := strings.Cut(fields[1], ":")
-			if !ok || port == "" || ip == "" {
-				fmt.Println("Error: Invalid format, expected IP:PORT")
+			IDprefix := fields[1]
+
+			// check if the target contact exists in the nodes routing table
+			contacts := kad.RoutingTable.GetAllContacts()
+			toContact, err := FindContactByID(contacts, IDprefix)
+			if err != nil {
+				fmt.Printf("Ping failed: %v \n", err)
 				continue
-			}
-			targetAddr := fmt.Sprintf("%s:%s", ip, port)
-			dummyContact := kademlia.NewContact(kademlia.NewRandomKademliaID(), targetAddr)
-			if resp, err := kad.SendPing(&dummyContact); err != nil {
-				fmt.Printf("Ping error: %v \n", err)
-			} else {
-				fmt.Printf("Ping response: %s from %s (ID: %s)\n", resp.Type, resp.Sender.Address, resp.Sender.ID)
 			}
 
-		// Retrieve the routing table
+			// initiate the ping
+			start := time.Now()
+			fmt.Printf("Pinging node with ID prefix: %s ... \n", IDprefix)
+			if resp, err := kad.SendPing(toContact); err != nil {
+				fmt.Printf("Ping error: %v \n", err)
+			} else {
+				// successful ping
+				t := time.Now()
+				diff := t.Sub(start)
+				elapsedMs := float64(diff) / float64(time.Millisecond)
+				ip, err := trimPortFromAddress(resp.Sender.Address)
+				if err != nil{
+					fmt.Printf("Error on address trim: %v", err)
+					continue
+				}
+				fmt.Printf("Ping response: %s from %s (ID: %s) in %.2f ms \n", resp.Type, ip, truncateID(resp.Sender.ID.String()), elapsedMs)
+			}
+
+			// RT: Retrieve the routing table
 		case "RT":
+
+			// Query for routing table contents
 			contacts := kad.RoutingTable.GetAllContacts()
 			if len(contacts) == 0 {
 				fmt.Println("Routing Table is empty.")
 				continue
 			}
-			fmt.Printf("Routing table for node %s (%s): \n", kad.Me.ID.String(), kad.Me.Address)
-			fmt.Printf("%-4s | %-11s | %-21s \n", "No.", "Node ID", "Address")
-			fmt.Println(strings.Repeat("-", 40))
 
-			for i, c := range contacts {
-				fmt.Printf("%-4d | %-11s | %-21s\n", i+1, truncateID(c.ID.String()), c.Address)
+			// Output table header 
+			fmt.Printf("Routing table for node %s (%s): \n", kad.Me.ID.String(), kad.Me.Address)
+			fmt.Printf("%-11s | %-11s | %-21s \n", "Bucket No.", "Node ID", "Address")
+			fmt.Println(strings.Repeat("-", 40))
+			
+			// Routing table entries 
+			for _, c := range contacts {
+				ip, err := trimPortFromAddress(c.Address)
+				if err != nil {
+					fmt.Printf("Error on address trim %v", err)
+					continue
+				}
+				bucketIndex := kad.RoutingTable.GetBucketIndex(c.ID)
+				fmt.Printf("%-11d | %-11s | %-21s\n", bucketIndex, truncateID(c.ID.String()), ip)
 			}
 
+		// PUT: upload contents of file under its hash 
 		case "PUT":
+
+			// Validate input
 			if len(fields) != 2 {
 				fmt.Printf("Error: PUT requires exactly 1 argument: PUT <filename>\n")
 				continue 
 			}
 			filename := fields[1]
 
-			// read file contents
+			// Read file contents
 			data, err := os.ReadFile(filename)
 			if err != nil {
 				fmt.Printf("Error reading file '%s': %v \n", filename, err)
@@ -163,11 +198,14 @@ func runCLI(kad *kademlia.Kademlia) {
 				continue 
 			}
 
-			// print key
+			// Print key
 			fmt.Printf("File '%s' has been stored successfully!\n", filename)
 			fmt.Printf("Key: %s \n", key.String())
 	
+		// GET: download value associated with given key 
 		case "GET":
+
+			// Validate input
 			if len(fields) < 2 || len(fields) > 3 {
 				fmt.Printf("Error: GET requires either 2 or 3 arguments: GET <Key> <optional: filename>")
 				continue 
@@ -183,7 +221,7 @@ func runCLI(kad *kademlia.Kademlia) {
 				continue
 
 			}
-			// if filename is given
+			// If filename is given
 			if len(fields) == 3 {
 				filename := fields[2]
 				err := os.WriteFile(filename, data, 0644)
@@ -192,22 +230,25 @@ func runCLI(kad *kademlia.Kademlia) {
 					continue 
 				}
 				fmt.Printf("Data saved to file '%s'\n", filename)
+
 			} else {
 				// if filename is not given 
-				// print key and data to user 
 				fmt.Printf("Key: %s | Bytes: %d | Data: %q\n", truncateID(key.String()), len(data), string(data))
 			}
 			if responderContact != nil {
 				fmt.Printf("Recieved from node: %s (ID: %s)\n", responderContact.Address, truncateID(responderContact.ID.String()))
 			}
 
-
+		// DS: prints the data store 
 		case "DS":
-    	// Dump all stored key-value pairs in this node's local store
+			
+			// If no data store has been initialized
     	if kad.DataStore == nil {
 				fmt.Println("DataStore not initialized.")
 				continue
 			}
+
+			// Get keys stored in data store and print if any exist 
 			keys := kad.DataStore.GetAllKeys()
 			if len(keys) == 0 {
 				fmt.Println("DataStore is currently empty.")
@@ -220,6 +261,7 @@ func runCLI(kad *kademlia.Kademlia) {
 					i+1, truncateID(k.String()), len(val), string(val))
 			}
 
+		// Print command options
 		default:
 			fmt.Println("Unknown command. Type 'ping', 'lookup', 'rt', or 'exit'.")
 		}
@@ -227,7 +269,30 @@ func runCLI(kad *kademlia.Kademlia) {
 	
 }
 
-// Truncates ID to last- and first 4 characters
+
+// =================
+// HELPER FUNCTIONS 
+// =================
+
+// ShowBanner prints the interactive CLI menu for the client.
+func ShowBanner(kad *kademlia.Kademlia) {
+	fmt.Printf(`==================================================
+Kademlia Interactive CLI - Connected Node
+ID:   %s
+ADDR: %s
+==================================================
+Options:
+- PING <Unique ID prefix>
+- PUT <filename>
+- GET <KEY> <optional: filename>
+- EXIT
+- RT
+- DS
+--------------------------------------------------
+`, kad.Me.ID.String(), kad.Me.Address)
+}
+
+// Truncates ID truncates the last- and first 4 characters
 func truncateID(id string) string {
 	if len(id) <= 8 {
 		return id
@@ -242,7 +307,55 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-// Discovers the ip address of the docker container for this node.
+// trimPortFromAddress extracts the ip from the address
+func trimPortFromAddress(address string) (string, error) {
+	ip, _, ok := strings.Cut(address, ":")
+	if !ok || ip == "" {
+		return "", ErrIncorrectFormat
+	}
+	return ip, nil
+}
+
+
+// FindContact finds a specific given contact in a given contact list and responds with the contact 
+func FindContactByAddress(contacts []kademlia.Contact, targetAddr string) (*kademlia.Contact, error) {
+	for i := range contacts {
+		if contacts[i].Address == targetAddr {
+			return &contacts[i], nil
+		}
+	}
+	return nil, ErrContactNotFound
+}
+
+// FindContactByID loops through a given contact list, if there's a match to the given IDprefix, the match is returned
+func FindContactByID(contacts []kademlia.Contact, IDprefix string) (*kademlia.Contact, error) {
+
+	prefix := strings.ToLower(strings.TrimSpace(IDprefix))
+	var matched *kademlia.Contact
+	matchCount := 0 
+	
+	for i := range contacts {
+
+		// Check the prefix against the contact list 
+		idHex := strings.ToLower(contacts[i].ID.String())
+		if strings.HasPrefix(idHex, prefix) {
+			matchCount++
+			matched = &contacts[i]
+		}
+	}
+	
+		if matchCount == 0 {
+			return nil, ErrContactNotFound
+		}
+
+		if matchCount > 1 {
+			return nil, ErrAmbigousPrefix
+		}
+
+		return matched, nil
+}
+
+// GetLocalIP discovers the ip address of the docker container for this node.
 func getLocalIP() (string, error) {
 	// get all addresses of all interfaces
 	addrs, err := net.InterfaceAddrs()

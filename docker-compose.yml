@@ -26,7 +26,7 @@ services:
       - BOOTSTRAP_IP=172.20.0.2
     deploy:
       mode: replicated
-      replicas: 5  
+      replicas: 20  
 #        resources:
 #           limits:
 #              cpus: "0.1"
