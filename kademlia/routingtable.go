@@ -47,7 +47,7 @@ func (routingTable *RoutingTable) AddContact(contact Contact) {
 	routingTable.mu.Lock()
 	defer routingTable.mu.Unlock()
 
-	bucketIndex := routingTable.getBucketIndex(contact.ID)
+	bucketIndex := routingTable.GetBucketIndex(contact.ID)
 	bucket := routingTable.buckets[bucketIndex]
 	if !bucket.AddContact(contact) {
 		slog.Debug("routing table bucket full, contact not added",
@@ -70,7 +70,7 @@ func (routingTable *RoutingTable) UpdateWithPing(candidate Contact, pinger func(
 	}
 
 	routingTable.mu.Lock()
-	bucketIndex := routingTable.getBucketIndex(candidate.ID)
+	bucketIndex := routingTable.GetBucketIndex(candidate.ID)
 	bucket := routingTable.buckets[bucketIndex]
 
 	// Try adding or promoting candidate
@@ -196,7 +196,7 @@ func (routingTable *RoutingTable) RemoveContact(contact Contact) bool {
 		return false
 	}
 
-	bucketIndex := routingTable.getBucketIndex(contact.ID)
+	bucketIndex := routingTable.GetBucketIndex(contact.ID)
 	bucket := routingTable.buckets[bucketIndex]
 	removed := bucket.RemoveContact(contact)
 	if removed {
@@ -216,7 +216,7 @@ func (routingTable *RoutingTable) FindClosestContacts(target *KademliaID, count 
 	defer routingTable.mu.RUnlock()
 
 	var candidates ContactCandidates
-	bucketIndex := routingTable.getBucketIndex(target)
+	bucketIndex := routingTable.GetBucketIndex(target)
 	bucket := routingTable.buckets[bucketIndex]
 
 	candidates.Append(bucket.GetContactAndCalcDistance(target))
@@ -242,7 +242,7 @@ func (routingTable *RoutingTable) FindClosestContacts(target *KademliaID, count 
 }
 
 // getBucketIndex get the correct Bucket index for the KademliaID
-func (routingTable *RoutingTable) getBucketIndex(id *KademliaID) int {
+func (routingTable *RoutingTable) GetBucketIndex(id *KademliaID) int {
 	distance := id.CalcDistance(routingTable.me.ID)
 	for i := range IDLength { // bytes 0 to 32
 		for j := range 8 { // bits in byte i

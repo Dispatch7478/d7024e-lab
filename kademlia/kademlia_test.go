@@ -326,7 +326,7 @@ func TestKademlia_Join(t *testing.T) {
 	t.Run("generateRandomIDForBucket produces IDs in correct bucket", func(t *testing.T) {
 		for bucket := 0; bucket < 256; bucket++ {
 			randID := kadA.generateRandomIDForBucket(bucket)
-			gotBucket := kadA.RoutingTable.getBucketIndex(randID)
+			gotBucket := kadA.RoutingTable.GetBucketIndex(randID)
 			if gotBucket != bucket {
 				t.Errorf("for bucket %d, generated ID landed in bucket %d", bucket, gotBucket)
 			}
