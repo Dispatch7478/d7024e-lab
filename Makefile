@@ -1,4 +1,4 @@
-NODES ?= 20 
+NODES ?= 49 
 NODE ?= 1
 
 .PHONY: build up down restart logs attach attach-bootstrap test clean 
