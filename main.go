@@ -24,6 +24,16 @@ var (
 // ==============
 
 func main() {
+	
+	// Configure structured logger
+	logLevel := slog.LevelInfo
+	if strings.ToUpper(os.Getenv("LOG_LEVEL")) == "DEBUG" {
+		logLevel = slog.LevelDebug
+	}
+	var handler slog.Handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})
+	slog.SetDefault(slog.New(handler))
+
+
 	portStr := getEnv("PORT", "8000")
 	port, _ := strconv.Atoi(portStr)
 	ip := getEnv("IP", "0.0.0.0")
@@ -68,6 +78,9 @@ func main() {
 			slog.Info("Successfully joined network via bootstrap", "bootstrap", bootstrapAddr)
 		}()
 	}
+
+	kad.StartReplicationWorker(kademlia.DefaultReplicationInterval)
+	defer kad.StopReplicationWorker()
 
 	runCLI(kad)
 }
