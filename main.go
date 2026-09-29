@@ -24,14 +24,6 @@ var (
 // ==============
 
 func main() {
-	// Configure structured logger
-	logLevel := slog.LevelInfo
-	if strings.ToUpper(os.Getenv("LOG_LEVEL")) == "DEBUG" {
-		logLevel = slog.LevelDebug
-	}
-	var handler slog.Handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})
-	slog.SetDefault(slog.New(handler))
-
 	portStr := getEnv("PORT", "8000")
 	port, _ := strconv.Atoi(portStr)
 	ip := getEnv("IP", "0.0.0.0")
@@ -77,9 +69,6 @@ func main() {
 		}()
 	}
 
-	kad.StartReplicationWorker(kademlia.DefaultReplicationInterval)
-	defer kad.StopReplicationWorker()
-
 	runCLI(kad)
 }
 
@@ -118,166 +107,173 @@ func runCLI(kad *kademlia.Kademlia) {
 		switch cmd {
 		
 			// EXIT: Exit cli
-		case "EXIT":
-			fmt.Println("Thank you for using this kademlia interactive CLI!")
-			os.Stdin.Close()
-			return
+			case "EXIT":
+				fmt.Println("Thank you for using this kademlia interactive CLI!")
+				os.Stdin.Close()
+				return
 
 			// PING: Pinging target node
-		case "PING":
+			case "PING":
 
-			// Validate input
-			if len(fields) != 2 {
-				fmt.Println("Error: Ping requires exactly one argument: <Unique ID prefix>")
-				continue
-			}
-			IDprefix := fields[1]
-
-			// check if the target contact exists in the nodes routing table
-			contacts := kad.RoutingTable.GetAllContacts()
-			toContact, err := FindContactByID(contacts, IDprefix)
-			if err != nil {
-				fmt.Printf("Ping failed: %v \n", err)
-				continue
-			}
-
-			// initiate the ping
-			start := time.Now()
-			fmt.Printf("Pinging node with ID prefix: %s ... \n", IDprefix)
-			if resp, err := kad.SendPing(toContact); err != nil {
-				fmt.Printf("Ping error: %v \n", err)
-			} else {
-				// successful ping
-				t := time.Now()
-				diff := t.Sub(start)
-				elapsedMs := float64(diff) / float64(time.Millisecond)
-				ip, err := trimPortFromAddress(resp.Sender.Address)
-				if err != nil{
-					fmt.Printf("Error on address trim: %v", err)
+				// Validate input
+				if len(fields) != 2 {
+					fmt.Println("Error: 'ping' requires exactly one argument: <Unique ID prefix>")
 					continue
 				}
-				fmt.Printf("Ping response: %s from %s (ID: %s) in %.2f ms \n", resp.Type, ip, truncateID(resp.Sender.ID.String()), elapsedMs)
-			}
+				IDprefix := fields[1]
 
-			// RT: Retrieve the routing table
-		case "RT":
-
-			// Query for routing table contents
-			contacts := kad.RoutingTable.GetAllContacts()
-			if len(contacts) == 0 {
-				fmt.Println("Routing Table is empty.")
-				continue
-			}
-
-			// Output table header 
-			fmt.Printf("Routing table for node %s (%s): \n", kad.Me.ID.String(), kad.Me.Address)
-			fmt.Printf("%-11s | %-11s | %-21s \n", "Bucket No.", "Node ID", "Address")
-			fmt.Println(strings.Repeat("-", 40))
-			
-			// Routing table entries 
-			for _, c := range contacts {
-				ip, err := trimPortFromAddress(c.Address)
+				// check if the target contact exists in the nodes routing table
+				contacts := kad.RoutingTable.GetAllContacts()
+				toContact, err := FindContactByID(contacts, IDprefix)
 				if err != nil {
-					fmt.Printf("Error on address trim %v", err)
+					fmt.Printf("Ping failed: %v \n", err)
 					continue
 				}
-				bucketIndex := kad.RoutingTable.GetBucketIndex(c.ID)
-				fmt.Printf("%-11d | %-11s | %-21s\n", bucketIndex, truncateID(c.ID.String()), ip)
-			}
 
-		// PUT: upload contents of file under its hash 
-		case "PUT":
+				// initiate the ping
+				start := time.Now()
+				fmt.Printf("Pinging node with ID prefix: %s ... \n", IDprefix)
+				if resp, err := kad.SendPing(toContact); err != nil {
+					fmt.Printf("Ping error: %v \n", err)
+				} else {
+					// successful ping
+					t := time.Now()
+					diff := t.Sub(start)
+					elapsedMs := float64(diff) / float64(time.Millisecond)
+					ip, err := trimPortFromAddress(resp.Sender.Address)
+					if err != nil{
+						fmt.Printf("Error on address trim: %v", err)
+						continue
+					}
+					fmt.Printf("Ping response: %s from %s (ID: %s) in %.2f ms \n", resp.Type, ip, truncateID(resp.Sender.ID.String()), elapsedMs)
+				}
+			case "SHOW":
+				if len(fields) != 2{
+					fmt.Println("Error: 'show' requires exactly one argument: <rt | ds >")
+					continue
+				}
+				option := strings.ToUpper(fields[1])
+				switch option {
+					// RT: Retrieve the routing table
+					case "RT":
+						// Query for routing table contents
+						contacts := kad.RoutingTable.GetAllContacts()
+						if len(contacts) == 0 {
+							fmt.Println("Routing Table is empty.")
+							continue
+						}
 
-			// Validate input
-			if len(fields) != 2 {
-				fmt.Printf("Error: PUT requires exactly 1 argument: PUT <filename>\n")
-				continue
-			}
-			filename := fields[1]
+						// Output table header 
+						fmt.Printf("Routing table for node %s (%s): \n", kad.Me.ID.String(), kad.Me.Address)
+						fmt.Printf("%-11s | %-11s | %-21s \n", "Bucket No.", "Node ID", "Address")
+						fmt.Println(strings.Repeat("-", 40))
+			
+						// Routing table entries 
+						for _, c := range contacts {
+							ip, err := trimPortFromAddress(c.Address)
+							if err != nil {
+								fmt.Printf("Error on address trim %v", err)
+								continue
+							}
+							bucketIndex := kad.RoutingTable.GetBucketIndex(c.ID)
+							fmt.Printf("%-11d | %-11s | %-21s\n", bucketIndex, truncateID(c.ID.String()), ip)
+						}
 
-			// Read file contents
-			data, err := os.ReadFile(filename)
-			if err != nil {
-				fmt.Printf("Error reading file '%s': %v \n", filename, err)
-				continue
-			}
+					// DS: prints the data store 
+					case "DS":	
+						// If no data store has been initialized
+    				if kad.DataStore == nil {
+							fmt.Println("DataStore not initialized.")
+							continue
+						}
 
-			// pass data to store function
-			key, err := kad.Store(data)
-			if err != nil {
-				fmt.Printf("Error storing data: %v\n", err)
-				continue
-			}
+						// Get keys stored in data store and print if any exist 
+						keys := kad.DataStore.GetAllKeys()
+						if len(keys) == 0 {
+							fmt.Println("DataStore is currently empty.")
+							continue
+						}
+						fmt.Printf("DataStore has %d items:\n", len(keys))
+						for i, k := range keys {
+							val, _ := kad.DataStore.Get(k)
+							fmt.Printf("[%d] Key: %s | Bytes: %d | Data: %q\n", 
+								i+1, truncateID(k.String()), len(val), string(val))
+						}
 
-			// Print key
-			fmt.Printf("File '%s' has been stored successfully!\n", filename)
-			fmt.Printf("Key: %s \n", key.String())
+				}
+		
+
+			// PUT: upload contents of file under its hash 
+			case "PUT":
+
+				// Validate input
+				if len(fields) != 2 {
+					fmt.Printf("Error: 'put' requires exactly 1 argument: PUT <filename>\n")
+					continue 
+				}
+				filename := fields[1]
+
+				// Read file contents
+				data, err := os.ReadFile(filename)
+				if err != nil {
+					fmt.Printf("Error reading file '%s': %v \n", filename, err)
+					continue 
+				} 
+
+				// pass data to store function 
+				key, err := kad.Store(data)
+				if err != nil {
+					fmt.Printf("Error storing data: %v\n", err)
+					continue 
+				}
+
+				// Print key
+				fmt.Printf("File '%s' has been stored successfully!\n", filename)
+				fmt.Printf("Key: %s \n", key.String())
 	
-		// GET: download value associated with given key 
-		case "GET":
+			// GET: download value associated with given key 
+			case "GET":
 
-			// Validate input
-			if len(fields) < 2 || len(fields) > 3 {
-				fmt.Printf("Error: GET requires either 2 or 3 arguments: GET <Key> <optional: filename>")
-				continue
-			}
-
-			keyHex := strings.TrimSpace(fields[1])
-			key := kademlia.NewKademliaID(keyHex)
-
-			// retrieve data at key
-			data, responderContact, err := kad.LookupDataByID(key)
-			if err != nil {
-				fmt.Printf("Error retrieving data from key '%s'", truncateID(key.String()))
-				continue
-
-			}
-			// If filename is given
-			if len(fields) == 3 {
-				filename := fields[2]
-				err := os.WriteFile(filename, data, 0644)
-				if err != nil {
-					fmt.Printf("Error saving file '%s': %v \n", filename, err)
-					continue
+				// Validate input
+				if len(fields) < 2 || len(fields) > 3 {
+					fmt.Printf("Error: 'get' requires either 2 or 3 arguments: GET <Key> <optional: filename>")
+					continue 
 				}
-				fmt.Printf("Data saved to file '%s'\n", filename)
 
-			} else {
-				// if filename is not given 
-				fmt.Printf("Key: %s | Bytes: %d | Data: %q\n", truncateID(key.String()), len(data), string(data))
-			}
-			if responderContact != nil {
-				fmt.Printf("Recieved from node: %s (ID: %s)\n", responderContact.Address, truncateID(responderContact.ID.String()))
-			}
+				keyHex := strings.TrimSpace(fields[1])
+				key := kademlia.NewKademliaID(keyHex)	
 
-		// DS: prints the data store 
-		case "DS":
-			
-			// If no data store has been initialized
-    	if kad.DataStore == nil {
-				fmt.Println("DataStore not initialized.")
-				continue
-			}
+				// retrieve data at key 
+				data, responderContact, err := kad.LookupDataByID(key)
+				if err != nil {
+					fmt.Printf("Error retrieving data from key '%s'", truncateID(key.String()))
+					continue
 
-			// Get keys stored in data store and print if any exist 
-			keys := kad.DataStore.GetAllKeys()
-			if len(keys) == 0 {
-				fmt.Println("DataStore is currently empty.")
-				continue
-			}
-			fmt.Printf("DataStore has %d items:\n", len(keys))
-			for i, k := range keys {
-				val, _ := kad.DataStore.Get(k)
-				fmt.Printf("[%d] Key: %s | Bytes: %d | Data: %q\n",
-					i+1, truncateID(k.String()), len(val), string(val))
-			}
+				}
+				// If filename is given
+				if len(fields) == 3 {
+					filename := fields[2]
+					err := os.WriteFile(filename, data, 0644)
+					if err != nil{
+						fmt.Printf("Error saving file '%s': %v \n", filename, err)
+						continue 
+					}
+					fmt.Printf("Data saved to file '%s'\n", filename)
 
-		// Print command options
-		default:
-			fmt.Println("Unknown command. Type 'ping', 'lookup', 'rt', or 'exit'.")
-		}
+				} else {
+					// if filename is not given 
+					fmt.Printf("Key: %s | Bytes: %d | Data: %q\n", truncateID(key.String()), len(data), string(data))
+				}
+				if responderContact != nil {
+					fmt.Printf("Recieved from node: %s (ID: %s)\n", responderContact.Address, truncateID(responderContact.ID.String()))
+				}
+
+			// Print command options
+			default:
+				fmt.Println("Unknown command. Type 'ping', 'lookup', 'rt', or 'exit'.")
+			}
 	}
-
+	
 }
 
 
@@ -293,12 +289,12 @@ ID:   %s
 ADDR: %s
 ==================================================
 Options:
-- PING <Unique ID prefix>
-- PUT <filename>
-- GET <KEY> <optional: filename>
-- EXIT
-- RT
-- DS
+- ping <Unique ID prefix>
+- put <filename>
+- get <KEY> <optional: filename>
+- exit
+- show rt 
+- show ds
 --------------------------------------------------
 `, kad.Me.ID.String(), kad.Me.Address)
 }
