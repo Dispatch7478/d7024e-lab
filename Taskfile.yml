@@ -16,3 +16,19 @@ tasks:
     desc: run tests with coverage and race detector
     cmds:
       - go test -v -race -cover ./...
+
+  experiment-build:
+    desc: build the experiment binary
+    cmds:
+      - go build -o bin/experiment ./cmd/experiment
+
+  experiment:
+    desc: run all kademlia experiments and output simulation logs
+    cmds:
+      - task: experiment-build
+      - ./bin/experiment -mode=all
+
+  plot:
+    desc: generate matplotlib graphs from simulation logs
+    cmds:
+      - python3 scripts/plot_experiments.py
