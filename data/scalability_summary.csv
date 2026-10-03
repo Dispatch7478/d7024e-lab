@@ -1,0 +1,6 @@
+network_size_n,run_count,total_trials,alpha,mean_avg_probes,variance_avg_probes,stddev_avg_probes,seed_variance,mean_success_rate
+50,3,75,3,10.29,0.5074,0.71,0.0533,100.0
+100,3,75,3,11,1.4865,1.22,0.0688,100.0
+200,3,75,3,11.59,2.1377,1.46,0.2117,100.0
+500,3,75,3,12.64,2.3957,1.55,0.0832,100.0
+1000,3,75,3,13.27,2.982,1.73,0.0789,100.0
