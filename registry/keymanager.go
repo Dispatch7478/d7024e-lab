@@ -123,18 +123,14 @@ func (km *KeyManager) Load(domain string) (*DomainKeyPair, error) {
 	}
 	km.mu.Lock()
 	defer km.mu.Unlock()
-	if dkp, exists := km.keys[norm]; exists {
-		return dkp, nil
-	}
 	if km.baseDir != "" {
 		dkp, err := LoadDomainKeyPair(filepath.Join(km.baseDir, norm+".json"))
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil, fmt.Errorf("%w: %s", ErrKeyNotFound, domain)
-			}
-			return nil, err
+		if err == nil {
+			km.keys[norm] = dkp
+			return dkp, nil
 		}
-		km.keys[norm] = dkp
+	}
+	if dkp, exists := km.keys[norm]; exists {
 		return dkp, nil
 	}
 	return nil, fmt.Errorf("%w: %s", ErrKeyNotFound, domain)
