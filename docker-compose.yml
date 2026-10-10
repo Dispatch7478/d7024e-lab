@@ -5,14 +5,15 @@
 # command line flags, in order to actually get any replicas started. That
 # command requires that a docker swarm is already running in order to function.
 
-version: "3"
 services:
-
   kademlia-bootstrap:
     image: kadlab:latest 
     container_name: kademlia-bootstrap 
     stdin_open: true
     tty: true
+    volumes:
+      - ./keys:/root/keys
+      - .:/data
     networks:
       kademlia_network:
         ipv4_address: 172.20.0.2
@@ -22,6 +23,9 @@ services:
     build: .
     stdin_open: true
     tty: true
+    volumes:
+      - ./keys:/root/keys
+      - .:/data
     environment:
       - BOOTSTRAP_IP=172.20.0.2
     deploy:

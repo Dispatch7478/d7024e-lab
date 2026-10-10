@@ -1,10 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"d7024e/kademlia"
+	"d7024e/registry"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -44,22 +45,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	listenAddr := fmt.Sprintf("%s:%d", localIP, port)
-
-	id := kademlia.NewKademliaIDFromAddress(listenAddr)
-	me := kademlia.NewContact(id, listenAddr)
-
-	slog.Info("Starting node", "address", listenAddr, "id", id.String())
-
-	rt := kademlia.NewRoutingTable(me)
-	ds := kademlia.NewDataStore()
-	network := kademlia.NewUDPNetwork(me, rt, ds)
-	if err := network.Listen(ip, port); err != nil {
+	keysDir := getEnv("KEYS_DIR", "./keys")
+	kad, network, km, dnsResolver, err := createNode(localIP, ip, port, keysDir)
+	if err != nil {
 		slog.Error("failed to listen", "err", err)
 		os.Exit(1)
 	}
+	defer network.Close()
 
-	kad := kademlia.NewKademlia(me, network, rt, ds, 0)
+	slog.Info("Starting node", "address", kad.Me.Address, "id", kad.Me.ID.String())
 
 	bootstrapIP := os.Getenv("BOOTSTRAP_IP")
 	if bootstrapIP != "" && bootstrapIP != localIP {
@@ -81,208 +75,53 @@ func main() {
 	kad.StartReplicationWorker(kademlia.DefaultReplicationInterval)
 	defer kad.StopReplicationWorker()
 
-	runCLI(kad)
+	runCLI(kad, km, dnsResolver)
 }
 
-// RunCLI is the main interactive CLI function for displaying
-// and adding functionality to the cli in addition handles user input
-func runCLI(kad *kademlia.Kademlia) {
+// createNode initializes a Kademlia node with UDP network, DataStore, KeyManager, and DNS resolver.
+func createNode(localIP, ip string, port int, keysDir string) (*kademlia.Kademlia, *kademlia.UDPNetwork, *registry.KeyManager, *NodeDNSResolver, error) {
+	listenAddr := fmt.Sprintf("%s:%d", localIP, port)
+	id := kademlia.NewKademliaIDFromAddress(listenAddr)
+	me := kademlia.NewContact(id, listenAddr)
 
-	scanner := bufio.NewScanner(os.Stdin)
-
-	// Display menu
-	ShowBanner(kad)
-
-	// main loop
-	for {
-
-		fmt.Print("> ")
-		if !scanner.Scan() {
-			select {}
-		}
-
-		// recive input and split into fields
-		input := strings.TrimSpace(scanner.Text())
-		fields := strings.Fields(input)
-
-		if len(fields) == 0 {
-			ShowBanner(kad)
-			continue
-		}
-
-		// Isolate main command: PING, RT, DS, GET, PUT
-		cmd := strings.ToUpper(fields[0])
-
-		// Swtich case for each command option
-		switch cmd {
-
-		// EXIT: Exit cli
-		case "EXIT":
-			fmt.Println("Thank you for using this kademlia interactive CLI!")
-			os.Stdin.Close()
-			return
-
-		// PING: Pinging target node
-		case "PING":
-
-			// Validate input
-			if len(fields) != 2 {
-				fmt.Println("Error: 'ping' requires exactly one argument: <Unique ID prefix>")
-				continue
-			}
-			IDprefix := fields[1]
-
-			// check if the target contact exists in the nodes routing table
-			contacts := kad.RoutingTable.GetAllContacts()
-			toContact, err := FindContactByID(contacts, IDprefix)
-			if err != nil {
-				fmt.Printf("Ping failed: %v \n", err)
-				continue
-			}
-
-			// initiate the ping
-			start := time.Now()
-			fmt.Printf("Pinging node with ID prefix: %s ... \n", IDprefix)
-			if resp, err := kad.SendPing(toContact); err != nil {
-				fmt.Printf("Ping error: %v \n", err)
-			} else {
-				// successful ping
-				t := time.Now()
-				diff := t.Sub(start)
-				elapsedMs := float64(diff) / float64(time.Millisecond)
-				ip, err := trimPortFromAddress(resp.Sender.Address)
-				if err != nil {
-					fmt.Printf("Error on address trim: %v", err)
-					continue
-				}
-				fmt.Printf("Ping response: %s from %s (ID: %s) in %.2f ms \n", resp.Type, ip, truncateID(resp.Sender.ID.String()), elapsedMs)
-			}
-		case "SHOW":
-			if len(fields) != 2 {
-				fmt.Println("Error: 'show' requires exactly one argument: <rt | ds >")
-				continue
-			}
-			option := strings.ToUpper(fields[1])
-			switch option {
-			// RT: Retrieve the routing table
-			case "RT":
-				// Query for routing table contents
-				contacts := kad.RoutingTable.GetAllContacts()
-				if len(contacts) == 0 {
-					fmt.Println("Routing Table is empty.")
-					continue
-				}
-
-				// Output table header
-				fmt.Printf("Routing table for node %s (%s): \n", kad.Me.ID.String(), kad.Me.Address)
-				fmt.Printf("%-11s | %-11s | %-21s \n", "Bucket No.", "Node ID", "Address")
-				fmt.Println(strings.Repeat("-", 40))
-
-				// Routing table entries
-				for _, c := range contacts {
-					ip, err := trimPortFromAddress(c.Address)
-					if err != nil {
-						fmt.Printf("Error on address trim %v", err)
-						continue
-					}
-					bucketIndex := kad.RoutingTable.GetBucketIndex(c.ID)
-					fmt.Printf("%-11d | %-11s | %-21s\n", bucketIndex, truncateID(c.ID.String()), ip)
-				}
-
-			// DS: prints the data store
-			case "DS":
-				// If no data store has been initialized
-				if kad.DataStore == nil {
-					fmt.Println("DataStore not initialized.")
-					continue
-				}
-
-				// Get keys stored in data store and print if any exist
-				keys := kad.DataStore.GetAllKeys()
-				if len(keys) == 0 {
-					fmt.Println("DataStore is currently empty.")
-					continue
-				}
-				fmt.Printf("DataStore has %d items:\n", len(keys))
-				for i, k := range keys {
-					val, _ := kad.DataStore.Get(k)
-					fmt.Printf("[%d] Key: %s | Bytes: %d | Data: %q\n",
-						i+1, truncateID(k.String()), len(val), string(val))
-				}
-
-			}
-
-		// PUT: upload contents of file under its hash
-		case "PUT":
-
-			// Validate input
-			if len(fields) != 2 {
-				fmt.Printf("Error: 'put' requires exactly 1 argument: PUT <filename>\n")
-				continue
-			}
-			filename := fields[1]
-
-			// Read file contents
-			data, err := os.ReadFile(filename)
-			if err != nil {
-				fmt.Printf("Error reading file '%s': %v \n", filename, err)
-				continue
-			}
-
-			// pass data to store function
-			key, err := kad.Store(data)
-			if err != nil {
-				fmt.Printf("Error storing data: %v\n", err)
-				continue
-			}
-
-			// Print key
-			fmt.Printf("File '%s' has been stored successfully!\n", filename)
-			fmt.Printf("Key: %s \n", key.String())
-
-		// GET: download value associated with given key
-		case "GET":
-
-			// Validate input
-			if len(fields) < 2 || len(fields) > 3 {
-				fmt.Printf("Error: 'get' requires either 2 or 3 arguments: GET <Key> <optional: filename>")
-				continue
-			}
-
-			keyHex := strings.TrimSpace(fields[1])
-			key := kademlia.NewKademliaID(keyHex)
-
-			// retrieve data at key
-			data, responderContact, err := kad.LookupDataByID(key)
-			if err != nil {
-				fmt.Printf("Error retrieving data from key '%s'", truncateID(key.String()))
-				continue
-
-			}
-			// If filename is given
-			if len(fields) == 3 {
-				filename := fields[2]
-				err := os.WriteFile(filename, data, 0644)
-				if err != nil {
-					fmt.Printf("Error saving file '%s': %v \n", filename, err)
-					continue
-				}
-				fmt.Printf("Data saved to file '%s'\n", filename)
-
-			} else {
-				// if filename is not given
-				fmt.Printf("Key: %s | Bytes: %d | Data: %q\n", truncateID(key.String()), len(data), string(data))
-			}
-			if responderContact != nil {
-				fmt.Printf("Recieved from node: %s (ID: %s)\n", responderContact.Address, truncateID(responderContact.ID.String()))
-			}
-
-		// Print command options
-		default:
-			fmt.Println("Unknown command. Type 'ping', 'lookup', 'rt', or 'exit'.")
-		}
+	rt := kademlia.NewRoutingTable(me)
+	ds := kademlia.NewDataStore()
+	network := kademlia.NewUDPNetwork(me, rt, ds)
+	if err := network.Listen(ip, port); err != nil {
+		return nil, nil, nil, nil, err
 	}
 
+	kad := kademlia.NewKademlia(me, network, rt, ds, 0)
+
+	km, err := registry.NewKeyManager(keysDir)
+	if err != nil {
+		slog.Warn("Failed to initialize file key manager, using memory", "err", err)
+		km, _ = registry.NewKeyManager("")
+	}
+
+	dnsResolver := NewNodeDNSResolver()
+	if km != nil {
+		dnsResolver.SetKeyManager(km)
+		for _, domain := range km.ListDomains() {
+			if dkp, err := km.Load(domain); err == nil && dkp != nil {
+				_ = dnsResolver.SetKey(domain, dkp.PublicKey)
+			}
+		}
+	}
+	kad.SetDNSResolver(dnsResolver)
+
+	return kad, network, km, dnsResolver, nil
+}
+
+// runCLI runs the interactive CLI session.
+func runCLI(kad *kademlia.Kademlia, km *registry.KeyManager, resolver *NodeDNSResolver) {
+	runCLIWithIO(kad, km, resolver, os.Stdin, os.Stdout)
+}
+
+// runCLIWithIO runs the interactive CLI session with custom IO.
+func runCLIWithIO(kad *kademlia.Kademlia, km *registry.KeyManager, resolver *NodeDNSResolver, in io.Reader, out io.Writer) {
+	cli := NewCLI(kad, km, resolver, in, out)
+	cli.Run()
 }
 
 // =================

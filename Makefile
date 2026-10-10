@@ -1,7 +1,7 @@
 NODES ?= 50 
 NODE ?= 1
 
-.PHONY: build up down restart logs attach attach-bootstrap test clean 
+.PHONY: build up down restart logs attach attach-bootstrap test clean reset wipe
 
 build:
 	CGO_ENABLED=0 GOOS=linux go build -o kadlab ./cmd/node
@@ -15,7 +15,15 @@ run: down build up
 down:
 	docker compose down 
 
-restart: down run 
+clean: down
+	rm -rf keys/*
+	rm -f installed_*.txt downloaded_*.txt
+
+wipe: clean
+
+reset: clean up
+
+restart: down up 
 
 logs:
 	docker compose logs -f 
