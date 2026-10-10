@@ -1,6 +1,8 @@
 package kademlia
 
 import (
+	"d7024e/registry"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -38,13 +40,22 @@ func NewKademlia(me Contact, network Network, routingTable *RoutingTable, ds *Da
 		a = alpha
 	}
 
-	return &Kademlia{
+	kad := &Kademlia{
 		Me:           me,
 		Network:      network,
 		RoutingTable: routingTable,
 		DataStore:    ds,
 		alpha:        a,
 	}
+
+	if ds != nil && ds.RecordFetcher() == nil {
+		ds.SetRecordFetcher(func(hash string) ([]byte, error) {
+			val, _, err := kad.LookupData(hash)
+			return val, err
+		})
+	}
+
+	return kad
 }
 
 // SendPing sends a ping message to target contact and returns the RPC response.
@@ -206,6 +217,21 @@ func (kademlia *Kademlia) Join(bootstrap Contact) error {
 	return nil
 }
 
+// SetDNSResolver configures the DNSResolver on this Kademlia node and its DataStore.
+func (kademlia *Kademlia) SetDNSResolver(resolver registry.DNSResolver) {
+	if kademlia.DataStore != nil {
+		kademlia.DataStore.SetDNSResolver(resolver)
+	}
+}
+
+// DNSResolver returns the configured DNSResolver on this Kademlia node's DataStore.
+func (kademlia *Kademlia) DNSResolver() registry.DNSResolver {
+	if kademlia.DataStore != nil {
+		return kademlia.DataStore.DNSResolver()
+	}
+	return nil
+}
+
 // Store hashes data to create key K = SHA-256(data), finds the k closest nodes to K via LookupContactByID,
 // stores the data locally, and sends STORE RPCs to each of the k closest nodes.
 func (kademlia *Kademlia) Store(data []byte) (*KademliaID, error) {
@@ -214,16 +240,30 @@ func (kademlia *Kademlia) Store(data []byte) (*KademliaID, error) {
 	}
 
 	key := NewKademliaIDFromData(data)
+	if err := kademlia.StoreWithKey(key, data); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+// StoreWithKey stores data at an explicit KademliaID key across the network and locally.
+func (kademlia *Kademlia) StoreWithKey(key *KademliaID, data []byte) error {
+	if key == nil {
+		return fmt.Errorf("key cannot be nil")
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("cannot store empty data")
+	}
 
 	// Always store in local DataStore
 	if kademlia.DataStore != nil {
 		if err := kademlia.DataStore.Store(*key, data); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	if kademlia.Network == nil || kademlia.RoutingTable == nil {
-		return key, nil
+		return nil
 	}
 
 	// Find the k closest nodes to key
@@ -250,7 +290,100 @@ func (kademlia *Kademlia) Store(data []byte) (*KademliaID, error) {
 		"replicas", len(closest),
 	)
 
-	return key, nil
+	return nil
+}
+
+// StoreLatestPointer stores a latest pointer record at its canonical DHT key: hash("domain:package:latest").
+func (kademlia *Kademlia) StoreLatestPointer(lp *registry.LatestPointer) error {
+	if lp == nil {
+		return fmt.Errorf("latest pointer cannot be nil")
+	}
+	if err := lp.Validate(); err != nil {
+		return fmt.Errorf("invalid latest pointer: %w", err)
+	}
+	if lp.Signature == "" {
+		return fmt.Errorf("%w: latest pointer must be signed", registry.ErrUnauthorized)
+	}
+	data, err := lp.MarshalJSON()
+	if err != nil {
+		return fmt.Errorf("failed to marshal latest pointer: %w", err)
+	}
+	keyBytes := lp.DHTKeyBytes()
+	key := KademliaID(keyBytes)
+	return kademlia.StoreWithKey(&key, data)
+}
+
+// StoreWithKeyForce stores data under key locally without DataStore validation
+// and broadcasts STORE messages to the k closest nodes across the network.
+func (kademlia *Kademlia) StoreWithKeyForce(key *KademliaID, data []byte) error {
+	if key == nil {
+		return fmt.Errorf("key cannot be nil")
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("cannot store empty data")
+	}
+
+	if kademlia.DataStore != nil {
+		kademlia.DataStore.StoreUnchecked(*key, data)
+	}
+
+	if kademlia.Network == nil || kademlia.RoutingTable == nil {
+		return nil
+	}
+
+	targetContact := NewContact(key, "")
+	closest := kademlia.LookupContact(&targetContact)
+
+	var wg sync.WaitGroup
+	for _, contact := range closest {
+		if kademlia.Me.ID != nil && contact.ID != nil && contact.ID.Equals(kademlia.Me.ID) {
+			continue
+		}
+		c := contact
+		wg.Go(func() {
+			_ = kademlia.Network.SendStoreMessage(&c, key, data)
+		})
+	}
+	wg.Wait()
+	return nil
+}
+
+// StoreLatestPointerForce stores the latest pointer locally (bypassing local DataStore validation)
+// and attempts network publication so remote nodes can validate or reject it.
+func (kademlia *Kademlia) StoreLatestPointerForce(lp *registry.LatestPointer) error {
+	if lp == nil {
+		return fmt.Errorf("latest pointer cannot be nil")
+	}
+	data, err := lp.MarshalJSON()
+	if err != nil {
+		return fmt.Errorf("failed to marshal latest pointer: %w", err)
+	}
+	keyBytes := lp.DHTKeyBytes()
+	key := KademliaID(keyBytes)
+	return kademlia.StoreWithKeyForce(&key, data)
+}
+
+// WalkVersionChain walks the version record chain starting from headHash via iterative DHT lookups.
+func (kademlia *Kademlia) WalkVersionChain(headHash string) ([]*registry.VersionRecord, error) {
+	return registry.WalkVersionChain(headHash, func(hash string) ([]byte, error) {
+		val, _, err := kademlia.LookupData(hash)
+		return val, err
+	})
+}
+
+// LookupLatestPointer looks up the latest pointer for a domain and package from the DHT.
+func (kademlia *Kademlia) LookupLatestPointer(domain, pkg string) (*registry.LatestPointer, *Contact, error) {
+	keyBytes := registry.LatestPointerDHTKeyBytes(domain, pkg)
+	target := KademliaID(keyBytes)
+	data, contact, err := kademlia.LookupDataByID(&target)
+	if err != nil {
+		return nil, nil, err
+	}
+	lp, err := registry.ParseLatestPointer(data)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse retrieved latest pointer: %w", err)
+	}
+	return lp, contact, nil
 }
 
 // LookupData looks up a value by its hexadecimal SHA-256 hash string.
@@ -360,23 +493,32 @@ func (kademlia *Kademlia) LookupDataByID(target *KademliaID) ([]byte, *Contact, 
 
 			// Value found on another node.
 			if len(res.data) > 0 {
-				// Check that K = SHA-256(V)
+				// Check that K = SHA-256(V) or passes DataStore validation (e.g. LatestPointer)
 				expectedHash := NewKademliaIDFromData(res.data)
 				if !expectedHash.Equals(target) {
-					slog.Error("discarding corrupted value from remote peer: hash mismatch",
-						"event", "corrupt_data_discarded",
-						"target", target.String(),
-						"actual_hash", expectedHash.String(),
-						"sender_id", res.contact.ID.String(),
-						"sender_address", res.contact.Address,
-					)
-					// Discard corrupted value and continue searching
-					continue
-				}
-
-				// Cache locally in DataStore
-				if kademlia.DataStore != nil {
-					_ = kademlia.DataStore.Store(*target, res.data)
+					var storeErr error
+					if kademlia.DataStore == nil {
+						storeErr = errors.New("datastore is nil")
+					} else {
+						storeErr = kademlia.DataStore.Store(*target, res.data)
+					}
+					if storeErr != nil {
+						slog.Error("discarding corrupted value from remote peer: hash mismatch or validation failed",
+							"event", "corrupt_data_discarded",
+							"target", target.String(),
+							"actual_hash", expectedHash.String(),
+							"sender_id", res.contact.ID.String(),
+							"sender_address", res.contact.Address,
+							"err", storeErr.Error(),
+						)
+						// Discard corrupted value and continue searching
+						continue
+					}
+				} else {
+					// Cache locally in DataStore
+					if kademlia.DataStore != nil {
+						_ = kademlia.DataStore.Store(*target, res.data)
+					}
 				}
 
 				slog.Info("data lookup succeeded",

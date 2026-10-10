@@ -17,7 +17,7 @@ func NewKademliaID(data string) *KademliaID {
 	decoded, _ := hex.DecodeString(data)
 
 	newKademliaID := KademliaID{}
-	for i := range IDLength {
+	for i := 0; i < len(decoded) && i < IDLength; i++ {
 		newKademliaID[i] = decoded[i]
 	}
 

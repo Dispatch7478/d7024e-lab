@@ -1,6 +1,7 @@
 package kademlia
 
 import (
+	"d7024e/registry"
 	"errors"
 	"fmt"
 	"testing"
@@ -554,4 +555,352 @@ func TestKademlia_ReplicationWorker(t *testing.T) {
 		}
 		kad.StopReplicationWorker()
 	})
+}
+
+func TestKademlia_StoreWithKeyAndLatestPointer(t *testing.T) {
+	hub := NewSimulatedHub()
+	kadA, cleanupA := setupTestNode(t, "1000000000010000000000000000000000000000000000000000000000000000", 3, hub)
+	defer cleanupA()
+	kadB, cleanupB := setupTestNode(t, "1000000000020000000000000000000000000000000000000000000000000000", 3, hub)
+	defer cleanupB()
+
+	kadA.RoutingTable.AddContact(kadB.Me)
+	kadB.RoutingTable.AddContact(kadA.Me)
+
+	domain := "example.com"
+	pkg := "net-pkg"
+	dkp, _ := registry.GenerateDomainKeyPair(domain)
+	resolver := registry.NewMockDNSResolver()
+	_ = resolver.SetKey(domain, dkp.PublicKey)
+
+	kadA.SetDNSResolver(resolver)
+	kadB.SetDNSResolver(resolver)
+
+	// Create v1.0.0
+	_, _, vr1Bytes, vr1Hash, lp1, _, lpKey := createTestRelease(t, dkp, pkg, "1.0.0", "blob 1", registry.ZeroHash)
+
+	// Store VR1 on Node A
+	_, err := kadA.Store(vr1Bytes)
+	if err != nil {
+		t.Fatalf("failed to store vr1: %v", err)
+	}
+
+	// Store LatestPointer using StoreLatestPointer helper
+	err = kadA.StoreLatestPointer(lp1)
+	if err != nil {
+		t.Fatalf("failed to store latest pointer: %v", err)
+	}
+
+	// Verify both nodes have the latest pointer
+	if !kadA.DataStore.Has(lpKey) {
+		t.Errorf("expected kadA to have latest pointer locally")
+	}
+	if !kadB.DataStore.Has(lpKey) {
+		t.Errorf("expected kadB to have received latest pointer via network store")
+	}
+
+	// Lookup from KadB using LookupLatestPointer
+	retrievedLP, _, err := kadB.LookupLatestPointer(domain, pkg)
+	if err != nil {
+		t.Fatalf("LookupLatestPointer failed: %v", err)
+	}
+	if retrievedLP.Version != "1.0.0" {
+		t.Errorf("expected version 1.0.0, got %s", retrievedLP.Version)
+	}
+
+	// Error handling: nil pointer
+	if err := kadA.StoreLatestPointer(nil); err == nil {
+		t.Errorf("expected error for nil LatestPointer")
+	}
+	// Error handling: nil key in StoreWithKey
+	if err := kadA.StoreWithKey(nil, []byte("data")); err == nil {
+		t.Errorf("expected error for nil key in StoreWithKey")
+	}
+	// Error handling: empty data in StoreWithKey
+	if err := kadA.StoreWithKey(&lpKey, []byte{}); err == nil {
+		t.Errorf("expected error for empty data in StoreWithKey")
+	}
+
+	_ = vr1Hash
+}
+
+func TestKademlia_NetworkCatchUp(t *testing.T) {
+	hub := NewSimulatedHub()
+	kadA, cleanupA := setupTestNode(t, "2000000000010000000000000000000000000000000000000000000000000000", 3, hub)
+	defer cleanupA()
+	kadB, cleanupB := setupTestNode(t, "2000000000020000000000000000000000000000000000000000000000000000", 3, hub)
+	defer cleanupB()
+
+	kadA.RoutingTable.AddContact(kadB.Me)
+	kadB.RoutingTable.AddContact(kadA.Me)
+
+	domain := "example.com"
+	pkg := "catchup-net"
+	dkp, _ := registry.GenerateDomainKeyPair(domain)
+	resolver := registry.NewMockDNSResolver()
+	_ = resolver.SetKey(domain, dkp.PublicKey)
+
+	kadA.SetDNSResolver(resolver)
+	kadB.SetDNSResolver(resolver)
+
+	// Node A prepares releases v1.0.0 and v2.0.0
+	_, _, vr1Bytes, vr1Hash, _, _, _ := createTestRelease(t, dkp, pkg, "1.0.0", "b1", registry.ZeroHash)
+	_, _, vr2Bytes, vr2Hash, lp2, _, lpKey := createTestRelease(t, dkp, pkg, "2.0.0", "b2", vr1Hash)
+
+	vr1Key := *NewKademliaID(vr1Hash)
+	vr2Key := *NewKademliaID(vr2Hash)
+
+	// Only Node A stores VR1 and VR2 in its DataStore (simulating it was uploaded to Node A)
+	_ = kadA.DataStore.Store(vr1Key, vr1Bytes)
+	_ = kadA.DataStore.Store(vr2Key, vr2Bytes)
+	if kadB.DataStore.Has(vr1Key) || kadB.DataStore.Has(vr2Key) {
+		t.Fatalf("kadB should not have VR1 or VR2 initially")
+	}
+
+	// Now Node B is asked to store LatestPointer v2.0.0 directly
+	// Node B's DataStore will detect it lacks VR2 and VR1,
+	// and will use its default recordFetcher (calling kadB.LookupData)
+	// to query Node A across the network and retrieve them.
+	err := kadB.StoreLatestPointer(lp2)
+	if err != nil {
+		t.Fatalf("expected Node B to catch up across network and store LP: %v", err)
+	}
+
+	// Verify Node B caught up: it now has VR1, VR2, and the LatestPointer locally.
+	if !kadB.DataStore.Has(vr1Key) {
+		t.Errorf("expected kadB to have caught up and stored vr1 locally")
+	}
+	if !kadB.DataStore.Has(vr2Key) {
+		t.Errorf("expected kadB to have caught up and stored vr2 locally")
+	}
+	if !kadB.DataStore.Has(lpKey) {
+		t.Errorf("expected kadB to have stored latest pointer locally")
+	}
+}
+
+func TestKademlia_PeerRejection(t *testing.T) {
+	hub := NewSimulatedHub()
+	kadA, cleanupA := setupTestNode(t, "3000000000010000000000000000000000000000000000000000000000000000", 3, hub)
+	defer cleanupA()
+	kadB, cleanupB := setupTestNode(t, "3000000000020000000000000000000000000000000000000000000000000000", 3, hub)
+	defer cleanupB()
+
+	kadA.RoutingTable.AddContact(kadB.Me)
+	kadB.RoutingTable.AddContact(kadA.Me)
+
+	domain := "example.com"
+	pkg := "peer-reject"
+	dkpOwner, _ := registry.GenerateDomainKeyPair(domain)
+	dkpAttacker, _ := registry.GenerateDomainKeyPair(domain)
+	resolver := registry.NewMockDNSResolver()
+	_ = resolver.SetKey(domain, dkpOwner.PublicKey)
+
+	kadA.SetDNSResolver(resolver)
+	kadB.SetDNSResolver(resolver)
+
+	// Legitimate release v1.0.0 and v2.0.0
+	_, _, vr1Bytes, vr1Hash, lp1, _, lpKey := createTestRelease(t, dkpOwner, pkg, "1.0.0", "b1", registry.ZeroHash)
+	_, _, vr2Bytes, vr2Hash, lp2, _, _ := createTestRelease(t, dkpOwner, pkg, "2.0.0", "b2", vr1Hash)
+
+	_, _ = kadA.Store(vr1Bytes)
+	_, _ = kadA.Store(vr2Bytes)
+	_, _ = kadB.Store(vr1Bytes)
+	_, _ = kadB.Store(vr2Bytes)
+
+	// Store v2.0.0 on both nodes
+	_ = kadA.StoreLatestPointer(lp2)
+
+	// Case 1: Attacker tries to publish rollback (v1.0.0) from KadA
+	err := kadA.StoreLatestPointer(lp1)
+	if !errors.Is(err, ErrVersionRollback) {
+		t.Errorf("expected ErrVersionRollback when attempting rollback store: %v", err)
+	}
+
+	// Case 2: Attacker tries to publish forged pointer signed with attacker key
+	_, _, vr3Bytes, vr3Hash, lp3Forged, _, _ := createTestRelease(t, dkpAttacker, pkg, "3.0.0", "b3", vr2Hash)
+	_, _ = kadA.Store(vr3Bytes)
+	_ = vr3Hash
+	err = kadA.StoreLatestPointer(lp3Forged)
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("expected ErrUnauthorized for forged pointer: %v", err)
+	}
+
+	// Case 3: Attacker tries to publish fork (v3.0.0 pointing to alt root)
+	_, _, vrAltBytes, vrAltHash, _, _, _ := createTestRelease(t, dkpOwner, pkg, "1.0.0", "alt root", registry.ZeroHash)
+	_, _, vrForkBytes, vrForkHash, lpFork, _, _ := createTestRelease(t, dkpOwner, pkg, "3.0.0", "fork", vrAltHash)
+	_, _ = kadA.Store(vrAltBytes)
+	_, _ = kadA.Store(vrForkBytes)
+	_ = vrForkHash
+	err = kadA.StoreLatestPointer(lpFork)
+	if !errors.Is(err, ErrHistoryFork) {
+		t.Errorf("expected ErrHistoryFork for branching history: %v", err)
+	}
+
+	_ = lpKey
+}
+
+func TestKademlia_RemotePeerNetworkRejection(t *testing.T) {
+	hub := NewSimulatedHub()
+	kadVictim, cleanupVictim := setupTestNode(t, "4000000000010000000000000000000000000000000000000000000000000000", 3, hub)
+	defer cleanupVictim()
+	kadAttacker, cleanupAttacker := setupTestNode(t, "4000000000020000000000000000000000000000000000000000000000000000", 3, hub)
+	defer cleanupAttacker()
+
+	kadVictim.RoutingTable.AddContact(kadAttacker.Me)
+	kadAttacker.RoutingTable.AddContact(kadVictim.Me)
+
+	domain := "example.com"
+	pkg := "net-peer-reject"
+	dkpOwner, _ := registry.GenerateDomainKeyPair(domain)
+	dkpAttacker, _ := registry.GenerateDomainKeyPair(domain)
+	resolver := registry.NewMockDNSResolver()
+	_ = resolver.SetKey(domain, dkpOwner.PublicKey)
+
+	kadVictim.SetDNSResolver(resolver)
+	kadAttacker.SetDNSResolver(resolver)
+
+	// Legitimate releases v1.0.0 and v2.0.0
+	_, _, vr1Bytes, vr1Hash, lp1, lp1Bytes, lpKey := createTestRelease(t, dkpOwner, pkg, "1.0.0", "b1", registry.ZeroHash)
+	_, _, vr2Bytes, vr2Hash, lp2, _, _ := createTestRelease(t, dkpOwner, pkg, "2.0.0", "b2", vr1Hash)
+
+	_, _ = kadVictim.Store(vr1Bytes)
+	_, _ = kadVictim.Store(vr2Bytes)
+	_ = kadVictim.StoreLatestPointer(lp2) // Victim is at v2.0.0
+
+	// Attacker sends rollback (v1.0.0) STORE RPC directly over network to victim
+	errRollback := kadAttacker.Network.SendStoreMessage(&kadVictim.Me, &lpKey, lp1Bytes)
+	if !errors.Is(errRollback, ErrVersionRollback) {
+		t.Errorf("expected victim to reject rollback RPC with ErrVersionRollback, got: %v", errRollback)
+	}
+
+	// Attacker sends forged signature STORE RPC directly over network to victim
+	_, _, vr3Bytes, vr3Hash, lpForged, lpForgedBytes, _ := createTestRelease(t, dkpAttacker, pkg, "3.0.0", "b3", vr2Hash)
+	_, _ = kadVictim.Store(vr3Bytes)
+	_ = vr3Hash
+	errForged := kadAttacker.Network.SendStoreMessage(&kadVictim.Me, &lpKey, lpForgedBytes)
+	if !errors.Is(errForged, ErrUnauthorized) {
+		t.Errorf("expected victim to reject forged RPC with ErrUnauthorized, got: %v", errForged)
+	}
+
+	// Attacker sends fork STORE RPC directly over network to victim
+	_, _, vrAltBytes, vrAltHash, _, _, _ := createTestRelease(t, dkpOwner, pkg, "1.0.0", "alt root", registry.ZeroHash)
+	_, _, vrForkBytes, vrForkHash, lpFork, lpForkBytes, _ := createTestRelease(t, dkpOwner, pkg, "3.0.0", "fork", vrAltHash)
+	_, _ = kadVictim.Store(vrAltBytes)
+	_, _ = kadVictim.Store(vrForkBytes)
+	_ = vrForkHash
+	errFork := kadAttacker.Network.SendStoreMessage(&kadVictim.Me, &lpKey, lpForkBytes)
+	if !errors.Is(errFork, ErrHistoryFork) {
+		t.Errorf("expected victim to reject fork RPC with ErrHistoryFork, got: %v", errFork)
+	}
+
+	// Verify victim's DataStore still holds legitimate v2.0.0 pointer after all malicious attacks!
+	val, found := kadVictim.DataStore.Get(lpKey)
+	if !found {
+		t.Fatalf("expected victim to retain latest pointer")
+	}
+	lpCurrent, err := registry.ParseLatestPointer(val)
+	if err != nil {
+		t.Fatalf("failed to parse victim latest pointer: %v", err)
+	}
+	if lpCurrent.Version != "2.0.0" {
+		t.Errorf("expected victim to remain at v2.0.0, got %s", lpCurrent.Version)
+	}
+
+	_ = lp1
+	_ = lpForged
+	_ = lpFork
+}
+
+func TestKademlia_DNSResolverGetter(t *testing.T) {
+	hub := NewSimulatedHub()
+	kad, cleanup := setupTestNode(t, "5000000000010000000000000000000000000000000000000000000000000000", 3, hub)
+	defer cleanup()
+
+	if kad.DNSResolver() != nil {
+		t.Errorf("expected initial nil DNSResolver")
+	}
+
+	resolver := registry.NewMockDNSResolver()
+	kad.SetDNSResolver(resolver)
+
+	if kad.DNSResolver() != resolver {
+		t.Errorf("DNSResolver getter returned mismatch")
+	}
+
+	// Nil datastore case
+	kadNilDS := &Kademlia{}
+	if kadNilDS.DNSResolver() != nil {
+		t.Errorf("expected nil for Kademlia with nil DataStore")
+	}
+	kadNilDS.SetDNSResolver(resolver) // Should not panic
+}
+
+func TestKademlia_StoreLatestPointerForce_And_WalkVersionChain(t *testing.T) {
+	hub := NewSimulatedHub()
+	kadA, cleanupA := setupTestNode(t, "6000000000010000000000000000000000000000000000000000000000000000", 3, hub)
+	defer cleanupA()
+	kadB, cleanupB := setupTestNode(t, "6000000000020000000000000000000000000000000000000000000000000000", 3, hub)
+	defer cleanupB()
+
+	kadA.RoutingTable.AddContact(kadB.Me)
+	kadB.RoutingTable.AddContact(kadA.Me)
+
+	domain := "example.com"
+	pkg := "force-walk-pkg"
+	dkp, _ := registry.GenerateDomainKeyPair(domain)
+	resolver := registry.NewMockDNSResolver()
+	_ = resolver.SetKey(domain, dkp.PublicKey)
+	kadA.SetDNSResolver(resolver)
+	kadB.SetDNSResolver(resolver)
+
+	// Publish v1.0.0 and v2.0.0 legitimately on KadA
+	_, _, vr1Bytes, vr1Hash, _, _, _ := createTestRelease(t, dkp, pkg, "1.0.0", "blob1", registry.ZeroHash)
+	_, _, vr2Bytes, vr2Hash, lp2, _, _ := createTestRelease(t, dkp, pkg, "2.0.0", "blob2", vr1Hash)
+
+	_, _ = kadA.Store(vr1Bytes)
+	_, _ = kadA.Store(vr2Bytes)
+	err := kadA.StoreLatestPointer(lp2)
+	if err != nil {
+		t.Fatalf("StoreLatestPointer failed: %v", err)
+	}
+
+	// Test WalkVersionChain on KadA
+	chain, err := kadA.WalkVersionChain(vr2Hash)
+	if err != nil {
+		t.Fatalf("WalkVersionChain failed: %v", err)
+	}
+	if len(chain) != 2 {
+		t.Fatalf("expected 2 records in chain, got %d", len(chain))
+	}
+	if chain[0].Version != "2.0.0" || chain[1].Version != "1.0.0" {
+		t.Errorf("unexpected chain order: %s, %s", chain[0].Version, chain[1].Version)
+	}
+
+	// Test StoreLatestPointerForce with rollback: KadA forces lp1 (v1.0.0) locally and across network
+	_, _, _, _, lp1, _, _ := createTestRelease(t, dkp, pkg, "1.0.0", "blob1", registry.ZeroHash)
+	errForce := kadA.StoreLatestPointerForce(lp1)
+	if errForce != nil {
+		t.Fatalf("StoreLatestPointerForce failed: %v", errForce)
+	}
+
+	// KadA's local DataStore accepted it via StoreUnchecked
+	retrievedLP, _, err := kadA.LookupLatestPointer(domain, pkg)
+	if err != nil || retrievedLP == nil {
+		t.Fatalf("expected to find forced pointer on KadA: %v", err)
+	}
+	if retrievedLP.Version != "1.0.0" {
+		t.Errorf("expected KadA to have forced v1.0.0, got %s", retrievedLP.Version)
+	}
+
+	// Edge cases: nil checks on StoreWithKeyForce and StoreLatestPointerForce
+	if err := kadA.StoreWithKeyForce(nil, []byte("data")); err == nil {
+		t.Errorf("expected error for nil key")
+	}
+	dummyKey := NewKademliaID("1234567890123456789012345678901234567890123456789012345678901234")
+	if err := kadA.StoreWithKeyForce(dummyKey, nil); err == nil {
+		t.Errorf("expected error for empty data")
+	}
+	if err := kadA.StoreLatestPointerForce(nil); err == nil {
+		t.Errorf("expected error for nil pointer")
+	}
 }

@@ -1,6 +1,7 @@
 package kademlia
 
 import (
+	"d7024e/registry"
 	"net"
 	"strings"
 	"testing"
@@ -228,4 +229,85 @@ func TestNetwork_FindData_And_Store(t *testing.T) {
 		t.Errorf("expected empty data for missing key, got %s", string(missingData))
 	}
 	_ = missingClosest
+}
+
+func TestNetwork_LatestPointer_StoreAndReject(t *testing.T) {
+	addrA := "127.0.0.1:9130"
+	addrB := "127.0.0.1:9131"
+
+	contactA := NewContact(NewKademliaIDFromAddress(addrA), addrA)
+	contactB := NewContact(NewKademliaIDFromAddress(addrB), addrB)
+
+	domain := "example.com"
+	pkg := "udp-lp"
+	dkpOwner, _ := registry.GenerateDomainKeyPair(domain)
+	dkpAttacker, _ := registry.GenerateDomainKeyPair(domain)
+	resolver := registry.NewMockDNSResolver()
+	_ = resolver.SetKey(domain, dkpOwner.PublicKey)
+
+	dsA := NewDataStore()
+	dsB := NewDataStore()
+	dsA.SetDNSResolver(resolver)
+	dsB.SetDNSResolver(resolver)
+
+	netA := NewUDPNetwork(contactA, nil, dsA)
+	netB := NewUDPNetwork(contactB, nil, dsB)
+
+	if err := netA.Listen("127.0.0.1", 9130); err != nil {
+		t.Fatalf("failed to listen A: %v", err)
+	}
+	defer netA.Close()
+
+	if err := netB.Listen("127.0.0.1", 9131); err != nil {
+		t.Fatalf("failed to listen B: %v", err)
+	}
+	defer netB.Close()
+
+	time.Sleep(20 * time.Millisecond)
+
+	// Create v1.0.0 and v2.0.0
+	_, _, vr1Bytes, vr1Hash, _, lp1Bytes, lpKey := createTestRelease(t, dkpOwner, pkg, "1.0.0", "b1", registry.ZeroHash)
+	_, _, vr2Bytes, vr2Hash, _, lp2Bytes, _ := createTestRelease(t, dkpOwner, pkg, "2.0.0", "b2", vr1Hash)
+
+	// Store VR1 and VR2 in Node B
+	_ = dsB.Store(*NewKademliaID(vr1Hash), vr1Bytes)
+	_ = dsB.Store(*NewKademliaID(vr2Hash), vr2Bytes)
+
+	// Node A sends STORE for LP v2.0.0 to Node B over UDP
+	if err := netA.SendStoreMessage(&contactB, &lpKey, lp2Bytes); err != nil {
+		t.Fatalf("failed to send store LP over UDP: %v", err)
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	// Verify Node B stored LP v2.0.0
+	val, found := dsB.Get(lpKey)
+	if !found {
+		t.Fatalf("expected node B to have stored LP v2.0.0")
+	}
+	lpParsed, err := registry.ParseLatestPointer(val)
+	if err != nil || lpParsed.Version != "2.0.0" {
+		t.Fatalf("expected version 2.0.0, got: %v", lpParsed)
+	}
+
+	// Node A sends rollback STORE (v1.0.0) over UDP -> Node B must reject and retain v2.0.0!
+	_ = netA.SendStoreMessage(&contactB, &lpKey, lp1Bytes)
+	time.Sleep(30 * time.Millisecond)
+
+	valAfterRollback, _ := dsB.Get(lpKey)
+	lpParsedAfterRollback, _ := registry.ParseLatestPointer(valAfterRollback)
+	if lpParsedAfterRollback.Version != "2.0.0" {
+		t.Errorf("node B rolled back to %s after malicious UDP store!", lpParsedAfterRollback.Version)
+	}
+
+	// Node A sends forged LP signed with attacker key over UDP -> Node B must reject!
+	_, _, vr3Bytes, vr3Hash, _, lp3ForgedBytes, _ := createTestRelease(t, dkpAttacker, pkg, "3.0.0", "b3", vr2Hash)
+	_ = dsB.Store(*NewKademliaID(vr3Hash), vr3Bytes)
+	_ = netA.SendStoreMessage(&contactB, &lpKey, lp3ForgedBytes)
+	time.Sleep(30 * time.Millisecond)
+
+	valAfterForged, _ := dsB.Get(lpKey)
+	lpParsedAfterForged, _ := registry.ParseLatestPointer(valAfterForged)
+	if lpParsedAfterForged.Version != "2.0.0" {
+		t.Errorf("node B accepted forged LP version %s over UDP!", lpParsedAfterForged.Version)
+	}
 }
