@@ -1,10 +1,8 @@
 package registry
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -120,76 +118,4 @@ func (v Version) GreaterThan(other Version) bool {
 // Equal reports whether v == other.
 func (v Version) Equal(other Version) bool {
 	return v.Compare(other) == 0
-}
-
-// CompareVersions parses two version strings and returns their comparison result (-1, 0, or 1).
-func CompareVersions(v1, v2 string) (int, error) {
-	ver1, err := ParseVersion(v1)
-	if err != nil {
-		return 0, fmt.Errorf("first version invalid: %w", err)
-	}
-	ver2, err := ParseVersion(v2)
-	if err != nil {
-		return 0, fmt.Errorf("second version invalid: %w", err)
-	}
-	return ver1.Compare(ver2), nil
-}
-
-// SortVersions sorts a slice of Version structs in ascending total order.
-func SortVersions(versions []Version) {
-	sort.Slice(versions, func(i, j int) bool {
-		return versions[i].LessThan(versions[j])
-	})
-}
-
-// SortVersionStrings parses, sorts, and formats a slice of version strings in ascending order.
-func SortVersionStrings(versions []string) ([]string, error) {
-	parsed := make([]Version, len(versions))
-	for i, s := range versions {
-		v, err := ParseVersion(s)
-		if err != nil {
-			return nil, err
-		}
-		parsed[i] = v
-	}
-	SortVersions(parsed)
-	result := make([]string, len(parsed))
-	for i, v := range parsed {
-		result[i] = v.String()
-	}
-	return result, nil
-}
-
-// MarshalJSON marshals the Version as a JSON string "Major.Minor.Patch".
-func (v Version) MarshalJSON() ([]byte, error) {
-	return json.Marshal(v.String())
-}
-
-// UnmarshalJSON unmarshals a Version from a JSON string.
-func (v *Version) UnmarshalJSON(data []byte) error {
-	var s string
-	if err := json.Unmarshal(data, &s); err != nil {
-		return err
-	}
-	parsed, err := ParseVersion(s)
-	if err != nil {
-		return err
-	}
-	*v = parsed
-	return nil
-}
-
-// MarshalText implements encoding.TextMarshaler.
-func (v Version) MarshalText() ([]byte, error) {
-	return []byte(v.String()), nil
-}
-
-// UnmarshalText implements encoding.TextUnmarshaler.
-func (v *Version) UnmarshalText(text []byte) error {
-	parsed, err := ParseVersion(string(text))
-	if err != nil {
-		return err
-	}
-	*v = parsed
-	return nil
 }

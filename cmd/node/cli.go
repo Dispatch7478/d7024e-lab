@@ -433,13 +433,11 @@ func (c *CLI) showDNS(domain string) error {
 	}
 
 	hexKey := registry.EncodePublicKeyHex(pub)
-	b64Key := registry.EncodePublicKeyBase64(pub)
 	txtRecord := registry.FormatDNSTXTRecord(pub)
 
 	fmt.Fprintln(c.Out, "DNS Ownership Record:")
 	fmt.Fprintf(c.Out, "  Domain:           %s\n", norm)
 	fmt.Fprintf(c.Out, "  Public Key (Hex): %s\n", hexKey)
-	fmt.Fprintf(c.Out, "  Public Key (B64): %s\n", b64Key)
 	fmt.Fprintf(c.Out, "  DNS TXT Record:   %s\n", txtRecord)
 	fmt.Fprintf(c.Out, "  Status:           VERIFIED\n")
 	return nil

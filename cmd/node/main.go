@@ -128,23 +128,7 @@ func runCLIWithIO(kad *kademlia.Kademlia, km *registry.KeyManager, resolver *Nod
 // HELPER FUNCTIONS
 // =================
 
-// ShowBanner prints the interactive CLI menu for the client.
-func ShowBanner(kad *kademlia.Kademlia) {
-	fmt.Printf(`==================================================
-Kademlia Interactive CLI - Connected Node
-ID:   %s
-ADDR: %s
-==================================================
-Options:
-- ping <Unique ID prefix>
-- put <filename>
-- get <KEY> <optional: filename>
-- exit
-- show rt 
-- show ds
---------------------------------------------------
-`, kad.Me.ID.String(), kad.Me.Address)
-}
+
 
 // Truncates ID truncates the last- and first 4 characters
 func truncateID(id string) string {

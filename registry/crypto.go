@@ -3,7 +3,6 @@ package registry
 import (
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"strings"
@@ -54,10 +53,6 @@ func Verify(pub ed25519.PublicKey, data, sig []byte) error {
 	return nil
 }
 
-func IsValidSignature(pub ed25519.PublicKey, msg, sig []byte) bool {
-	return Verify(pub, msg, sig) == nil
-}
-
 func (dkp *DomainKeyPair) Sign(msg []byte) ([]byte, error) {
 	if dkp == nil {
 		return nil, errors.New("nil key pair")
@@ -83,12 +78,6 @@ func (dkp *DomainKeyPair) DNSTXTRecord() string {
 		return ""
 	}
 	return FormatDNSTXTRecord(dkp.PublicKey)
-}
-func (dkp *DomainKeyPair) PublicKeyBase64() string {
-	if dkp == nil {
-		return ""
-	}
-	return EncodePublicKeyBase64(dkp.PublicKey)
 }
 
 func cleanHex(s string) string {
@@ -125,8 +114,4 @@ func DecodeSignatureHex(s string) ([]byte, error) {
 		return nil, ErrInvalidEncoding
 	}
 	return b, nil
-}
-
-func EncodePublicKeyBase64(pub ed25519.PublicKey) string {
-	return base64.StdEncoding.EncodeToString(pub)
 }

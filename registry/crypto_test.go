@@ -57,17 +57,11 @@ func TestSignAndVerify(t *testing.T) {
 	if err := Verify(pub, msg, sig); err != nil {
 		t.Fatalf("Verify failed on valid signature: %v", err)
 	}
-	if !IsValidSignature(pub, msg, sig) {
-		t.Fatal("expected IsValidSignature to return true")
-	}
 
 	// Tampered message
 	tampered := []byte("hello kademlia package registry tampered")
 	if err := Verify(pub, tampered, sig); !errors.Is(err, ErrSignatureVerificationFailed) {
 		t.Fatalf("expected ErrSignatureVerificationFailed on tampered msg, got %v", err)
-	}
-	if IsValidSignature(pub, tampered, sig) {
-		t.Fatal("expected IsValidSignature to return false on tampered msg")
 	}
 
 	// Different public key
@@ -104,10 +98,6 @@ func TestDomainKeyPair_Methods(t *testing.T) {
 	if len(hexKey) != 64 {
 		t.Fatalf("expected 64 hex chars, got %d", len(hexKey))
 	}
-	b64Key := dkp.PublicKeyBase64()
-	if len(b64Key) == 0 {
-		t.Fatal("expected non-empty base64 key")
-	}
 	txtRec := dkp.DNSTXTRecord()
 	if txtRec != DefaultDNSTXTPrefix+hexKey {
 		t.Fatalf("unexpected TXT record: %s", txtRec)
@@ -123,9 +113,6 @@ func TestDomainKeyPair_Methods(t *testing.T) {
 	}
 	if nilDKP.PublicKeyHex() != "" {
 		t.Fatal("expected empty PublicKeyHex on nil")
-	}
-	if nilDKP.PublicKeyBase64() != "" {
-		t.Fatal("expected empty PublicKeyBase64 on nil")
 	}
 	if nilDKP.DNSTXTRecord() != "" {
 		t.Fatal("expected empty DNSTXTRecord on nil")
@@ -185,11 +172,5 @@ func TestHexEncoding(t *testing.T) {
 	}
 	if _, err := DecodeSignatureHex(hex.EncodeToString([]byte("short"))); !errors.Is(err, ErrInvalidEncoding) {
 		t.Fatal("expected ErrInvalidEncoding on short signature hex")
-	}
-
-	// Base64 public key
-	b64 := EncodePublicKeyBase64(pub)
-	if len(b64) == 0 {
-		t.Fatal("expected non-empty base64 string")
 	}
 }

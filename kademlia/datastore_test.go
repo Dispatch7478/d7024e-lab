@@ -355,12 +355,12 @@ func TestDataStore_RejectionRules(t *testing.T) {
 	_, _, vr1Bytes, vr1Hash, _, lp1Bytes, lpKey := createTestRelease(t, dkpOwner, pkg, "1.0.0", "b1", registry.ZeroHash)
 	_, _, vr2Bytes, vr2Hash, _, lp2Bytes, _ := createTestRelease(t, dkpOwner, pkg, "2.0.0", "b2", vr1Hash)
 
-	// No DNS resolver configured -> ErrNoDNSResolver
+	// No DNS resolver configured -> registry.ErrNoDNSResolver
 	dsNoDNS := NewDataStore()
 	_ = dsNoDNS.Store(*NewKademliaID(vr1Hash), vr1Bytes)
 	err := dsNoDNS.Store(lpKey, lp1Bytes)
-	if !errors.Is(err, ErrNoDNSResolver) {
-		t.Errorf("expected ErrNoDNSResolver without DNS resolver, got: %v", err)
+	if !errors.Is(err, registry.ErrNoDNSResolver) {
+		t.Errorf("expected registry.ErrNoDNSResolver without DNS resolver, got: %v", err)
 	}
 
 	// Setup valid DataStore
@@ -370,24 +370,24 @@ func TestDataStore_RejectionRules(t *testing.T) {
 	_ = ds.Store(*NewKademliaID(vr2Hash), vr2Bytes)
 	_ = ds.Store(lpKey, lp2Bytes) // current latest is 2.0.0
 
-	// Rollback rejection: attempt to store 1.0.0 over 2.0.0 -> ErrVersionRollback
+	// Rollback rejection: attempt to store 1.0.0 over 2.0.0 -> registry.ErrVersionRollback
 	err = ds.Store(lpKey, lp1Bytes)
-	if !errors.Is(err, ErrVersionRollback) {
-		t.Errorf("expected ErrVersionRollback for 1.0.0 over 2.0.0, got: %v", err)
+	if !errors.Is(err, registry.ErrVersionRollback) {
+		t.Errorf("expected registry.ErrVersionRollback for 1.0.0 over 2.0.0, got: %v", err)
 	}
 
-	// Equal version rejection: attempt to re-store 2.0.0 -> ErrVersionRollback
+	// Equal version rejection: attempt to re-store 2.0.0 -> registry.ErrVersionRollback
 	err = ds.Store(lpKey, lp2Bytes)
-	if !errors.Is(err, ErrVersionRollback) {
-		t.Errorf("expected ErrVersionRollback for equal version 2.0.0 over 2.0.0, got: %v", err)
+	if !errors.Is(err, registry.ErrVersionRollback) {
+		t.Errorf("expected registry.ErrVersionRollback for equal version 2.0.0 over 2.0.0, got: %v", err)
 	}
 
-	// Unauthorized signature rejection -> ErrUnauthorized
+	// Unauthorized signature rejection -> registry.ErrUnauthorized
 	_, _, vr3AttackerBytes, vr3AttackerHash, _, lp3AttackerBytes, _ := createTestRelease(t, dkpAttacker, pkg, "3.0.0", "b3", vr2Hash)
 	_ = ds.Store(*NewKademliaID(vr3AttackerHash), vr3AttackerBytes)
 	err = ds.Store(lpKey, lp3AttackerBytes)
-	if !errors.Is(err, ErrUnauthorized) {
-		t.Errorf("expected ErrUnauthorized for forged pointer, got: %v", err)
+	if !errors.Is(err, registry.ErrUnauthorized) {
+		t.Errorf("expected registry.ErrUnauthorized for forged pointer, got: %v", err)
 	}
 
 	// Fork rejection: v3.0.0 points to alternative root v1.0.0-alt instead of v2.0.0
@@ -397,8 +397,8 @@ func TestDataStore_RejectionRules(t *testing.T) {
 	_ = ds.Store(*NewKademliaID(vr3ForkHash), vr3ForkBytes)
 
 	err = ds.Store(lpKey, lp3ForkBytes)
-	if !errors.Is(err, ErrHistoryFork) {
-		t.Errorf("expected ErrHistoryFork for branching history, got: %v", err)
+	if !errors.Is(err, registry.ErrHistoryFork) {
+		t.Errorf("expected registry.ErrHistoryFork for branching history, got: %v", err)
 	}
 
 	// Storing LatestPointer under a random key -> ErrKeyMismatch
@@ -483,8 +483,8 @@ func TestDataStore_CatchUp(t *testing.T) {
 	})
 
 	err := dsFailing.Store(lpKey, lp3Bytes)
-	if !errors.Is(err, ErrMissingVersionRecord) {
-		t.Errorf("expected ErrMissingVersionRecord when catch-up fetcher fails, got: %v", err)
+	if !errors.Is(err, registry.ErrMissingVersionRecord) {
+		t.Errorf("expected registry.ErrMissingVersionRecord when catch-up fetcher fails, got: %v", err)
 	}
 }
 
@@ -580,8 +580,8 @@ func TestDataStore_NoPartialCacheOnFailure(t *testing.T) {
 	})
 
 	err := ds.Store(lpKey, lp3Bytes)
-	if !errors.Is(err, ErrMissingVersionRecord) {
-		t.Fatalf("expected ErrMissingVersionRecord, got: %v", err)
+	if !errors.Is(err, registry.ErrMissingVersionRecord) {
+		t.Fatalf("expected registry.ErrMissingVersionRecord, got: %v", err)
 	}
 
 	// Since VR2 failed, VR3 must NOT have been left cached in ds!
@@ -641,8 +641,8 @@ func TestDataStore_ConcurrentStoresForkPrevention(t *testing.T) {
 	if errLegit != nil {
 		t.Errorf("legitimate store failed: %v", errLegit)
 	}
-	if !errors.Is(errFork, ErrHistoryFork) {
-		t.Errorf("expected ErrHistoryFork for concurrent fork attempt, got: %v", errFork)
+	if !errors.Is(errFork, registry.ErrHistoryFork) {
+		t.Errorf("expected registry.ErrHistoryFork for concurrent fork attempt, got: %v", errFork)
 	}
 
 	// Ensure the stored latest pointer is v2.0.0

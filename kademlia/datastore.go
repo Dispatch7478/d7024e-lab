@@ -16,16 +16,6 @@ var (
 	ErrKeyMismatch = errors.New("key does not match SHA-256 hash of value")
 	// ErrValueTooLarge is returned if a value exceeds the maximum configured size.
 	ErrValueTooLarge = errors.New("value exceeds maximum allowed size")
-
-	// Validation error aliases from registry package
-	ErrUnauthorized         = registry.ErrUnauthorized
-	ErrVersionRollback      = registry.ErrVersionRollback
-	ErrHistoryFork          = registry.ErrHistoryFork
-	ErrMissingVersionRecord = registry.ErrMissingVersionRecord
-	ErrCorruptRecord        = registry.ErrCorruptRecord
-	ErrInvalidHistoryChain  = registry.ErrInvalidHistoryChain
-	ErrNoDNSResolver        = registry.ErrNoDNSResolver
-	ErrInvalidLatestPointer = registry.ErrInvalidLatestPointer
 )
 
 const DefaultMaxValSize = 64 * 1024 // Probably changing later for arbitrary size with tcp.

@@ -712,8 +712,8 @@ func TestKademlia_PeerRejection(t *testing.T) {
 
 	// Case 1: Attacker tries to publish rollback (v1.0.0) from KadA
 	err := kadA.StoreLatestPointer(lp1)
-	if !errors.Is(err, ErrVersionRollback) {
-		t.Errorf("expected ErrVersionRollback when attempting rollback store: %v", err)
+	if !errors.Is(err, registry.ErrVersionRollback) {
+		t.Errorf("expected registry.ErrVersionRollback when attempting rollback store: %v", err)
 	}
 
 	// Case 2: Attacker tries to publish forged pointer signed with attacker key
@@ -721,8 +721,8 @@ func TestKademlia_PeerRejection(t *testing.T) {
 	_, _ = kadA.Store(vr3Bytes)
 	_ = vr3Hash
 	err = kadA.StoreLatestPointer(lp3Forged)
-	if !errors.Is(err, ErrUnauthorized) {
-		t.Errorf("expected ErrUnauthorized for forged pointer: %v", err)
+	if !errors.Is(err, registry.ErrUnauthorized) {
+		t.Errorf("expected registry.ErrUnauthorized for forged pointer: %v", err)
 	}
 
 	// Case 3: Attacker tries to publish fork (v3.0.0 pointing to alt root)
@@ -732,8 +732,8 @@ func TestKademlia_PeerRejection(t *testing.T) {
 	_, _ = kadA.Store(vrForkBytes)
 	_ = vrForkHash
 	err = kadA.StoreLatestPointer(lpFork)
-	if !errors.Is(err, ErrHistoryFork) {
-		t.Errorf("expected ErrHistoryFork for branching history: %v", err)
+	if !errors.Is(err, registry.ErrHistoryFork) {
+		t.Errorf("expected registry.ErrHistoryFork for branching history: %v", err)
 	}
 
 	_ = lpKey
@@ -769,8 +769,8 @@ func TestKademlia_RemotePeerNetworkRejection(t *testing.T) {
 
 	// Attacker sends rollback (v1.0.0) STORE RPC directly over network to victim
 	errRollback := kadAttacker.Network.SendStoreMessage(&kadVictim.Me, &lpKey, lp1Bytes)
-	if !errors.Is(errRollback, ErrVersionRollback) {
-		t.Errorf("expected victim to reject rollback RPC with ErrVersionRollback, got: %v", errRollback)
+	if !errors.Is(errRollback, registry.ErrVersionRollback) {
+		t.Errorf("expected victim to reject rollback RPC with registry.ErrVersionRollback, got: %v", errRollback)
 	}
 
 	// Attacker sends forged signature STORE RPC directly over network to victim
@@ -778,8 +778,8 @@ func TestKademlia_RemotePeerNetworkRejection(t *testing.T) {
 	_, _ = kadVictim.Store(vr3Bytes)
 	_ = vr3Hash
 	errForged := kadAttacker.Network.SendStoreMessage(&kadVictim.Me, &lpKey, lpForgedBytes)
-	if !errors.Is(errForged, ErrUnauthorized) {
-		t.Errorf("expected victim to reject forged RPC with ErrUnauthorized, got: %v", errForged)
+	if !errors.Is(errForged, registry.ErrUnauthorized) {
+		t.Errorf("expected victim to reject forged RPC with registry.ErrUnauthorized, got: %v", errForged)
 	}
 
 	// Attacker sends fork STORE RPC directly over network to victim
@@ -789,8 +789,8 @@ func TestKademlia_RemotePeerNetworkRejection(t *testing.T) {
 	_, _ = kadVictim.Store(vrForkBytes)
 	_ = vrForkHash
 	errFork := kadAttacker.Network.SendStoreMessage(&kadVictim.Me, &lpKey, lpForkBytes)
-	if !errors.Is(errFork, ErrHistoryFork) {
-		t.Errorf("expected victim to reject fork RPC with ErrHistoryFork, got: %v", errFork)
+	if !errors.Is(errFork, registry.ErrHistoryFork) {
+		t.Errorf("expected victim to reject fork RPC with registry.ErrHistoryFork, got: %v", errFork)
 	}
 
 	// Verify victim's DataStore still holds legitimate v2.0.0 pointer after all malicious attacks!
