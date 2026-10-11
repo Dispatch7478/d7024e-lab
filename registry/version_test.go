@@ -153,4 +153,3 @@ func TestVersion_TotalOrdering(t *testing.T) {
 		t.Fatalf("numerical precedence failed: 1.0.10 should be greater than 1.0.2")
 	}
 }
-

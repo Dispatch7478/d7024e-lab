@@ -128,8 +128,6 @@ func runCLIWithIO(kad *kademlia.Kademlia, km *registry.KeyManager, resolver *Nod
 // HELPER FUNCTIONS
 // =================
 
-
-
 // Truncates ID truncates the last- and first 4 characters
 func truncateID(id string) string {
 	if len(id) <= 8 {
