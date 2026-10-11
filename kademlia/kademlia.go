@@ -496,24 +496,27 @@ func (kademlia *Kademlia) LookupDataByID(target *KademliaID) ([]byte, *Contact, 
 				// Check that K = SHA-256(V) or passes DataStore validation (e.g. LatestPointer)
 				expectedHash := NewKademliaIDFromData(res.data)
 				if !expectedHash.Equals(target) {
-					var storeErr error
+					var valErr error
 					if kademlia.DataStore == nil {
-						storeErr = errors.New("datastore is nil")
+						valErr = errors.New("datastore is nil")
 					} else {
-						storeErr = kademlia.DataStore.Store(*target, res.data)
+						valErr = kademlia.DataStore.Validate(*target, res.data)
 					}
-					if storeErr != nil {
+					if valErr != nil {
 						slog.Error("discarding corrupted value from remote peer: hash mismatch or validation failed",
 							"event", "corrupt_data_discarded",
 							"target", target.String(),
 							"actual_hash", expectedHash.String(),
 							"sender_id", res.contact.ID.String(),
 							"sender_address", res.contact.Address,
-							"err", storeErr.Error(),
+							"err", valErr.Error(),
 						)
 						// Discard corrupted value and continue searching
 						continue
 					}
+					// Only cache content-addressable (immutable) data in local DataStore.
+					// Mutable records (LatestPointer where K != SHA-256(V)) should not be cached
+					// otherwise clients retain stale versions when authors publish updates.
 				} else {
 					// Cache locally in DataStore
 					if kademlia.DataStore != nil {
