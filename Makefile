@@ -1,7 +1,7 @@
 NODES ?= 50 
 NODE ?= 1
 
-.PHONY: build up down restart logs attach attach-bootstrap test clean reset wipe
+.PHONY: build up down restart logs attach attach-bootstrap shell test clean reset wipe
 
 build:
 	CGO_ENABLED=0 GOOS=linux go build -o kadlab ./cmd/node
@@ -33,6 +33,9 @@ attach:
 
 attach-bootstrap:
 	docker attach kademlia-bootstrap
+
+shell:
+	docker exec -it d7024e-lab-kademliaNodes-$(NODE) sh
 
 test:
 	go test -v -cover -count=1 ./...

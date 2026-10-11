@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lmittmann/tint"
 )
 
 var (
@@ -31,7 +33,16 @@ func main() {
 	if strings.ToUpper(os.Getenv("LOG_LEVEL")) == "DEBUG" {
 		logLevel = slog.LevelDebug
 	}
-	var handler slog.Handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})
+	var handler slog.Handler = tint.NewHandler(os.Stderr, &tint.Options{
+		Level:      logLevel,
+		TimeFormat: time.TimeOnly,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if (a.Key == "target" || a.Key == "key" || a.Key == "from_id") && a.Value.Kind() == slog.KindString {
+				return slog.String(a.Key, truncateID(a.Value.String()))
+			}
+			return a
+		},
+	})
 	slog.SetDefault(slog.New(handler))
 
 	portStr := getEnv("PORT", "8000")
